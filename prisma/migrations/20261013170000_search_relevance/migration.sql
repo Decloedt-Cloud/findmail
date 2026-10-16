@@ -1,0 +1,1 @@
+ALTER TABLE "Creator" ADD COLUMN "relevanceScore" INTEGER NOT NULL DEFAULT 0;

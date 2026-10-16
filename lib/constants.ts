@@ -1,5 +1,6 @@
 export const APP_NAME = "Creator Email Finder";
 export const COMPANY_NAME = "Wayo Ads";
+export const MIN_CREATOR_SUBSCRIBERS = 5000;
 
 export const TARGET_COUNTRIES = [
   { code: "US", name: "United States" },
@@ -44,6 +45,7 @@ export const SYSTEM_NICHES: { name: string; keywords: string[] }[] = [
     keywords: ["programming tutorial", "learn to code", "programming tips"],
   },
   { name: "SaaS", keywords: ["SaaS", "indie hacker", "build in public SaaS"] },
+  { name: "Business", keywords: ["business", "entrepreneur", "small business"] },
   {
     name: "Technology Reviews",
     keywords: ["tech review", "gadget review", "technology reviews"],
@@ -92,6 +94,7 @@ export const SUBSCRIBER_RANGES = [
 export const YOUTUBE_QUOTA_COSTS = {
   search: 100,
   channels: 1,
+  playlistItems: 1,
   videos: 1,
 } as const;
 
@@ -110,15 +113,19 @@ export const CSV_FIELDS = [
 export type CsvField = (typeof CSV_FIELDS)[number];
 
 export const EXPORT_COLUMNS = [
-  "channel_name",
-  "channel_id",
-  "channel_url",
-  "country",
-  "niche",
-  "subscriber_count",
-  "official_website",
-  "business_email",
-  "email_status",
-  "email_source_url",
-  "email_discovered_at",
+  "channelName",
+  "handle",
+  "youtubeUrl",
+  "subscribers",
+  "averageViews",
+  "email",
+  "website",
+  "instagram",
+  "twitter",
+  "tiktok",
+  "lastActiveAt",
+  "matchedVideoTitle",
+  "matchedVideoUrl",
+  "matchedVideoViews",
+  "matchedVideoPublishedAt",
 ] as const;

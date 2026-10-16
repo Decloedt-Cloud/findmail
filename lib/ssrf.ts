@@ -29,16 +29,16 @@ export function isBlockedIp(ip: string): boolean {
   if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
     return true;
   }
-  const [a, b] = parts as [number, number, number, number];
+  const [a, b, c] = parts as [number, number, number, number];
   if (a === 0 || a === 10 || a === 127) return true;
   if (a === 100 && b >= 64 && b <= 127) return true;
   if (a === 169 && b === 254) return true;
   if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 0) return true;
+  if (a === 192 && b === 0 && (c === 0 || c === 2)) return true;
   if (a === 192 && b === 168) return true;
   if (a === 198 && (b === 18 || b === 19)) return true;
-  if (a === 198 && b === 51) return true;
-  if (a === 203 && b === 0) return true;
+  if (a === 198 && b === 51 && c === 100) return true;
+  if (a === 203 && b === 0 && c === 113) return true;
   if (a >= 224) return true;
   return false;
 }
@@ -75,16 +75,21 @@ export function assertPublicHttpUrl(raw: string): URL {
 function lookupPublic(
   hostname: string,
   options: unknown,
-  callback: (err: NodeJS.ErrnoException | null, address: string, family: number) => void,
+  callback: (err: NodeJS.ErrnoException | null, address: string | { address: string; family: number }[], family?: number) => void,
 ) {
   dnsLookup(hostname, { all: true, verbatim: true }, (error, addresses) => {
     if (error) {
       callback(error, "", 4);
       return;
     }
-    const list = addresses as { address: string; family: number }[];
-    if (list.length === 0 || list.some((entry) => isBlockedIp(entry.address))) {
+    const list = (addresses as { address: string; family: number }[]).filter((entry) => !isBlockedIp(entry.address));
+    if (list.length === 0) {
       callback(Object.assign(new Error(`Refusing non-public address for ${hostname}`), { code: "BLOCKED" }), "", 4);
+      return;
+    }
+    const wantsAll = typeof options === "object" && options !== null && "all" in options && Boolean((options as { all?: boolean }).all);
+    if (wantsAll) {
+      callback(null, list);
       return;
     }
     const chosen = list[0];

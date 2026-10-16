@@ -157,6 +157,17 @@ model Creator {
   discoverySource      DiscoverySource       @default(YOUTUBE_SEARCH)
   emailSearchStatus    EmailSearchStatus     @default(NOT_SEARCHED)
   recentVideoPublishedAt DateTime?
+  lastActiveAt         DateTime?
+  averageViews         Int?
+  averageViewsMethod   String?
+  instagramUrl         String?
+  twitterUrl           String?
+  tiktokUrl            String?
+  matchedVideoTitle    String?
+  matchedVideoUrl      String?
+  matchedVideoViews    Int?
+  matchedVideoPublishedAt DateTime?
+  relevanceScore       Int                   @default(0)
   hidden               Boolean               @default(false)
   discoveredAt         DateTime              @default(now())
   lastMetadataSyncAt   DateTime?
