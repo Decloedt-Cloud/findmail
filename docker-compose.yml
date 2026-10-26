@@ -5,8 +5,6 @@ services:
       POSTGRES_USER: findmail
       POSTGRES_PASSWORD: findmail
       POSTGRES_DB: findmail
-    ports:
-      - "5432:5432"
     volumes:
       - postgres:/var/lib/postgresql/data
     healthcheck:
@@ -17,8 +15,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -31,6 +27,8 @@ services:
     env_file: .env
     ports:
       - "3000:3000"
+    volumes:
+      - findmail-data:/app/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -46,6 +44,8 @@ services:
     build: .
     command: npm run worker
     env_file: .env
+    volumes:
+      - findmail-data:/app/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -54,3 +54,4 @@ services:
 
 volumes:
   postgres:
+  findmail-data:

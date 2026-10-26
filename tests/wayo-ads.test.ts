@@ -15,7 +15,7 @@ const creator = {
   subscriberCount: 1200,
   subscriberVisibility: "PUBLIC",
   videoCount: 12,
-  viewCount: 3400n,
+  viewCount: BigInt(3400),
   thumbnailUrl: "https://img.test/ada.jpg",
   averageViews: 400,
   lastActiveAt: new Date("2026-10-01T00:00:00Z"),

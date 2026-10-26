@@ -12,6 +12,7 @@ import {
   paginateSearch,
   parseYouTubeReference,
 } from "@/lib/youtube/client";
+import { audienceFocus, audienceSearchPasses } from "@/lib/youtube/audience";
 import { discoverYouTubeChannels, topicTier } from "@/lib/youtube/discovery";
 import { matchTerms, reuseLimit, searchQueries } from "@/lib/youtube/terms";
 
@@ -163,6 +164,87 @@ describe("youtube pagination and dedupe", () => {
     expect(playlists).toHaveLength(1);
   });
 
+  it("searches recent videos first when the audience is small", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      const parsed = new URL(url);
+      if (parsed.pathname.endsWith("/search")) {
+        if (parsed.searchParams.get("order") !== "date") {
+          return jsonResponse({
+            items: [{ id: { videoId: "big", channelId: "UCbig" }, snippet: { title: "Food empire", channelTitle: "Giant", description: "" } }],
+          });
+        }
+        return jsonResponse({
+          items: [{ id: { videoId: "small", channelId: "UCsmall" }, snippet: { title: "Food diary", channelTitle: "Home Cook", description: "Weekly food videos" } }],
+        });
+      }
+      const id = parsed.searchParams.get("id");
+      if (id === "UCbig") {
+        return jsonResponse({
+          items: [{ id: "UCbig", snippet: { title: "Giant", country: "US" }, statistics: { subscriberCount: "5000000", hiddenSubscriberCount: false } }],
+        });
+      }
+      return jsonResponse({
+        items: [{
+          id: "UCsmall",
+          snippet: { title: "Home Cook", description: "Weekly food videos", country: "US" },
+          statistics: { subscriberCount: "12000", hiddenSubscriberCount: false },
+        }],
+      });
+    });
+    const result = await discoverYouTubeChannels(new YouTubeClient("test-key", fetchImpl), {
+      keywords: ["Food"],
+      countries: ["US"],
+      maxResults: 1,
+      minSubscribers: 5000,
+      maxSubscribers: 20000,
+    });
+    expect(result.channels.map((channel) => channel.id)).toEqual(["UCsmall"]);
+    const orders = fetchImpl.mock.calls
+      .map((call) => new URL(String(call[0])))
+      .filter((url) => url.pathname.endsWith("/search"))
+      .map((url) => url.searchParams.get("order"));
+    expect(orders[0]).toBe("date");
+  });
+
+  it("searches the most viewed videos first when the audience is large", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      const parsed = new URL(url);
+      if (parsed.pathname.endsWith("/search")) {
+        if (parsed.searchParams.get("order") !== "viewCount") {
+          return jsonResponse({
+            items: [{ id: { channelId: "UCsmall" }, snippet: { channelTitle: "Tiny Finance", description: "finance" } }],
+          });
+        }
+        return jsonResponse({
+          items: [{ id: { videoId: "big", channelId: "UCbig" }, snippet: { title: "Finance daily", channelTitle: "Finance Daily", description: "" } }],
+        });
+      }
+      const id = parsed.searchParams.get("id");
+      if (id === "UCsmall") {
+        return jsonResponse({
+          items: [{ id: "UCsmall", snippet: { title: "Tiny Finance", description: "finance", country: "US" }, statistics: { subscriberCount: "8000", hiddenSubscriberCount: false } }],
+        });
+      }
+      return jsonResponse({
+        items: [{
+          id: "UCbig",
+          snippet: { title: "Finance Daily", description: "Daily finance", country: "US" },
+          statistics: { subscriberCount: "2000000", hiddenSubscriberCount: false },
+        }],
+      });
+    });
+    const result = await discoverYouTubeChannels(new YouTubeClient("test-key", fetchImpl), {
+      keywords: ["Finance"],
+      countries: ["US"],
+      maxResults: 1,
+      minSubscribers: 500000,
+    });
+    expect(result.channels.map((channel) => channel.id)).toEqual(["UCbig"]);
+    const firstSearch = fetchImpl.mock.calls.map((call) => new URL(String(call[0]))).find((url) => url.pathname.endsWith("/search"));
+    expect(firstSearch?.searchParams.get("order")).toBe("viewCount");
+    expect(firstSearch?.searchParams.get("type")).toBe("video");
+  });
+
   it("searches the French alias when the English query finds nobody", async () => {
     const fetchImpl = vi.fn(async (url: string) => {
       const parsed = new URL(url);
@@ -240,6 +322,13 @@ describe("youtube credentials and quota", () => {
     expect(matchTerms("artificial intelligence")).toEqual(["artificial intelligence"]);
     expect(searchQueries("Business", "FR")).toEqual(["Business", "entrepreneur", "entreprise", "entrepreneuriat"]);
     expect(searchQueries("Business", "US")).toEqual(["Business"]);
+    expect(audienceFocus(5000, 20000)).toBe("small");
+    expect(audienceFocus(20000, 100000)).toBe("mid");
+    expect(audienceFocus(500000, null)).toBe("large");
+    expect(audienceFocus(5000, null)).toBe("broad");
+    expect(audienceSearchPasses(5000, 20000)).toEqual([{ type: "video", order: "date" }, { type: "video" }]);
+    expect(audienceSearchPasses(500000, null)[0]).toEqual({ type: "video", order: "viewCount" });
+    expect(audienceSearchPasses(5000, null)).toEqual([{ type: "channel" }, { type: "video" }]);
     expect(topicTier({ title: "Finance Hebdo", handle: null, description: "", videoTitle: null, keywords: ["Business et finance"] })).toBe("strong");
     expect(reuseLimit(10)).toBe(5);
     expect(reuseLimit(25)).toBe(12);

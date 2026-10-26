@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { ChevronDown, Search } from "lucide-react";
 import { toast } from "sonner";
 import { ALL_COUNTRIES, MIN_CREATOR_SUBSCRIBERS } from "@/lib/constants";
+import { DISCOVERY_AUDIENCES, audienceFocus } from "@/lib/youtube/audience";
 import { api } from "@/lib/client";
 import { CreatorResultList } from "@/components/creator-result-list";
 import { Button } from "@/components/ui/button";
@@ -116,14 +117,25 @@ export default function DiscoverPage() {
   const topicKeywords = topic.split(",").map((item) => item.trim()).filter(Boolean);
   const keywordCount = Math.max(1, topicKeywords.length);
   const countryCount = Math.max(1, countries.length);
-  const estimatedQuota = estimateSearchQuota({
+  const minSubscriberCount = Math.max(MIN_CREATOR_SUBSCRIBERS, Number(minSubscribers) || MIN_CREATOR_SUBSCRIBERS);
+  const maxSubscriberCount = maxSubscribers ? Number(maxSubscribers) : undefined;
+  const selectedAudience = DISCOVERY_AUDIENCES.find((item) => item.min === minSubscriberCount && item.max === (maxSubscriberCount ?? null))?.id ?? null;
+  const audienceHint = {
+    small: "Recent videos are searched first, so smaller channels are not buried under the biggest creators.",
+    mid: "Popular and recent videos are both searched for this audience.",
+    large: "The most viewed videos and channels are searched first.",
+    broad: `Channels with at least ${formatNumber(MIN_CREATOR_SUBSCRIBERS)} subscribers.`,
+  }[audienceFocus(minSubscriberCount, maxSubscriberCount)];
+  const quotaInput = {
     keywordCount,
     countryCount,
-    maxResults,
     includeRecentVideos: Boolean(recencyDays),
     keywords: topicKeywords,
     countries,
-  });
+    minSubscribers: minSubscriberCount,
+    maxSubscribers: maxSubscriberCount,
+  };
+  const estimatedQuota = estimateSearchQuota({ ...quotaInput, maxResults });
   const quotaLeft = quota ? Math.max(0, quota.daily - quota.used) : null;
   const overQuota = quotaLeft != null && estimatedQuota > quotaLeft;
   const quotaRatio = quota && quota.daily > 0 ? Math.min(100, Math.round((quota.used / quota.daily) * 100)) : 0;
@@ -147,8 +159,8 @@ export default function DiscoverPage() {
           keywords,
           niche: keywords.length === 1 ? keywords[0] : undefined,
           countries,
-          minSubscribers: Math.max(MIN_CREATOR_SUBSCRIBERS, Number(minSubscribers) || MIN_CREATOR_SUBSCRIBERS),
-          maxSubscribers: maxSubscribers ? Number(maxSubscribers) : undefined,
+          minSubscribers: minSubscriberCount,
+          maxSubscribers: maxSubscriberCount,
           maxResults,
           requirePublicEmail: requireEmail,
           recencyDays: recencyDays ? Number(recencyDays) : undefined,
@@ -292,21 +304,27 @@ export default function DiscoverPage() {
           </div>
 
           <div>
-            <p className="text-xs font-semibold tracking-wide text-muted-foreground">MINIMUM SUBSCRIBERS</p>
-            <Input
-              className="mt-2 h-12 rounded-2xl"
-              type="number"
-              min={0}
-              step={1000}
-              aria-label="Minimum subscribers"
-              value={minSubscribers}
-              onChange={(event) => setMinSubscribers(event.target.value)}
-              onBlur={(event) => {
-                const value = Number(event.currentTarget.value);
-                if (!Number.isFinite(value) || value < MIN_CREATOR_SUBSCRIBERS) setMinSubscribers(String(MIN_CREATOR_SUBSCRIBERS));
-              }}
-            />
-            <p className="mt-2 text-sm text-muted-foreground">Only creators with at least {formatNumber(MIN_CREATOR_SUBSCRIBERS)} subscribers.</p>
+            <p className="text-xs font-semibold tracking-wide text-muted-foreground">AUDIENCE</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {DISCOVERY_AUDIENCES.map((item) => {
+                const selected = selectedAudience === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    aria-pressed={selected}
+                    className={`rounded-full border px-4 py-2 text-sm ${selected ? "border-primary bg-primary text-primary-foreground" : "bg-card hover:bg-accent"}`}
+                    onClick={() => {
+                      setMinSubscribers(String(item.min));
+                      setMaxSubscribers(item.max == null ? "" : String(item.max));
+                    }}
+                  >
+                    {item.label}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-2 text-sm text-muted-foreground">{audienceHint}</p>
           </div>
 
           <div>
@@ -340,6 +358,19 @@ export default function DiscoverPage() {
             </button>
             {filtersOpen ? (
               <div className="space-y-3 border-t px-4 py-3">
+                <Input
+                  type="number"
+                  min={MIN_CREATOR_SUBSCRIBERS}
+                  step={1000}
+                  placeholder="Min subscribers"
+                  aria-label="Minimum subscribers"
+                  value={minSubscribers}
+                  onChange={(event) => setMinSubscribers(event.target.value)}
+                  onBlur={(event) => {
+                    const value = Number(event.currentTarget.value);
+                    if (!Number.isFinite(value) || value < MIN_CREATOR_SUBSCRIBERS) setMinSubscribers(String(MIN_CREATOR_SUBSCRIBERS));
+                  }}
+                />
                 <Input type="number" min={0} placeholder="Max subscribers" aria-label="Maximum subscribers" value={maxSubscribers} onChange={(event) => setMaxSubscribers(event.target.value)} />
                 <Input type="number" min={1} placeholder="Active within days" aria-label="Recent video within days" value={recencyDays} onChange={(event) => setRecencyDays(event.target.value)} />
                 <label className="flex items-start gap-2 text-sm">
@@ -354,7 +385,7 @@ export default function DiscoverPage() {
             <p className="text-sm font-medium">How many creators do you want?</p>
             <div className="mt-3 grid grid-cols-4 gap-2">
               {RESULT_COUNTS.map((count) => {
-                const cost = estimateSearchQuota({ keywordCount, countryCount, maxResults: count, includeRecentVideos: Boolean(recencyDays), keywords: topicKeywords, countries });
+                const cost = estimateSearchQuota({ ...quotaInput, maxResults: count });
                 const tooCostly = quotaLeft != null && cost > quotaLeft;
                 return (
                   <button

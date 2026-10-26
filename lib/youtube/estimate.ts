@@ -1,4 +1,5 @@
 import { YOUTUBE_QUOTA_COSTS } from "@/lib/constants";
+import { audienceSearchPasses } from "@/lib/youtube/audience";
 import { searchQueries } from "@/lib/youtube/terms";
 
 export function inspectLimit(maxResults: number) {
@@ -13,11 +14,14 @@ export function estimateSearchQuota(input: {
   includeRecentVideos: boolean;
   keywords?: string[];
   countries?: string[];
+  minSubscribers?: number | null;
+  maxSubscribers?: number | null;
 }) {
   const requested = Math.max(1, input.maxResults);
   const pages = Math.min(3, Math.max(1, Math.ceil(requested / 50)));
+  const passes = audienceSearchPasses(input.minSubscribers, input.maxSubscribers).length;
   const extraSearches = aliasSearches(input.keywords ?? [], input.countries ?? []);
-  const searches = Math.max(1, input.keywordCount) * Math.max(1, input.countryCount) * pages * 2 + extraSearches;
+  const searches = Math.max(1, input.keywordCount) * Math.max(1, input.countryCount) * pages * passes + extraSearches;
   const channelLookups = pages;
   const uploadLookups = requested;
   const videoLookups = Math.max(1, Math.ceil((requested * 11) / 50));

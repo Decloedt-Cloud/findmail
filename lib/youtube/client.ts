@@ -199,6 +199,7 @@ export class YouTubeClient {
     channelId?: string;
     pageToken?: string;
     maxResults: number;
+    order?: "date" | "rating" | "relevance" | "title" | "videoCount" | "viewCount";
   }): Promise<YouTubeSearchPage> {
     const body = asRecord(
       await this.get(
@@ -212,6 +213,7 @@ export class YouTubeClient {
           relevanceLanguage: input.relevanceLanguage,
           publishedAfter: input.publishedAfter,
           pageToken: input.pageToken,
+          order: input.order && input.order !== "relevance" ? input.order : undefined,
           maxResults: String(Math.min(50, Math.max(1, input.maxResults))),
         },
         "search",

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-const PUBLIC_PATHS = new Set(["/login", "/api/health"]);
+const PUBLIC_PATHS = new Set(["/login", "/api/health", "/developers"]);
 
 function hasSession(request: Request) {
   const cookie = request.headers.get("cookie") ?? "";
@@ -10,7 +10,7 @@ function hasSession(request: Request) {
 export function proxy(request: Request) {
   const url = new URL(request.url);
   const { pathname } = url;
-  if (pathname.startsWith("/api/auth") || pathname === "/api/integrations/wayo-ads/creators" || PUBLIC_PATHS.has(pathname)) return NextResponse.next();
+  if (pathname.startsWith("/api/auth") || pathname.startsWith("/api/integrations/wayo-ads/") || PUBLIC_PATHS.has(pathname)) return NextResponse.next();
   if (hasSession(request)) {
     if (pathname === "/login") return NextResponse.redirect(new URL("/dashboard", url));
     return NextResponse.next();

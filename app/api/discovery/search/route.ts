@@ -21,6 +21,8 @@ export async function POST(request: Request) {
       includeRecentVideos: Boolean(input.recencyDays),
       keywords: input.keywords,
       countries: input.countries,
+      minSubscribers: input.minSubscribers,
+      maxSubscribers: input.maxSubscribers,
     });
     const start = new Date();
     start.setUTCHours(0, 0, 0, 0);

@@ -8,6 +8,7 @@ import {
   type YouTubeSearchItem,
   type YouTubeVideoDetails,
 } from "@/lib/youtube/client";
+import { audienceSearchPasses } from "@/lib/youtube/audience";
 import { matchTerms, searchQueries } from "@/lib/youtube/terms";
 import { AVERAGE_VIEWS_METHOD, fitViewCount, selectRecentPublicVideos } from "@/lib/youtube/metrics";
 import type { EmailCandidate } from "@/lib/email/discovery";
@@ -257,7 +258,7 @@ export async function discoverYouTubeChannels(
   for (const country of countries) {
     for (const keyword of query.keywords) {
       for (const term of searchQueries(keyword, country)) {
-        for (const type of ["channel", "video"] as const) {
+        for (const pass of audienceSearchPasses(query.minSubscribers, query.maxSubscribers)) {
           let pageToken: string | undefined;
           for (let page = 0; page < MAX_PAGES_PER_QUERY; page += 1) {
             if (await shouldStop()) break;
@@ -265,10 +266,11 @@ export async function discoverYouTubeChannels(
             await report("searching");
             const result = await client.search({
               query: term,
-              type,
+              type: pass.type,
+              order: pass.order,
               regionCode: country || undefined,
               relevanceLanguage: query.language || (country === "FR" ? "fr" : undefined),
-              publishedAfter: type === "video" ? publishedAfter : undefined,
+              publishedAfter: pass.type === "video" ? publishedAfter : undefined,
               pageToken,
               maxResults: 50,
             });
