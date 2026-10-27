@@ -26,6 +26,18 @@ export const wayoAdsIcpSchema = z.object({
   onboardingId: z.string().trim().min(4).max(80),
   websiteUrl: z.string().trim().url().max(300),
   brandName: z.string().trim().min(1).max(120),
+  stage: z.enum(["simplified", "complex"]).optional().default("simplified"),
+  requestId: z.string().trim().min(4).max(80).optional(),
+  matchingText: z.string().trim().max(4000).optional(),
+  maxChannels: z.number().int().min(1).max(30).optional(),
+  request: z
+    .object({
+      title: icpText.optional(),
+      description: z.string().trim().max(2000).optional(),
+      niche: icpText.nullable().optional(),
+      kind: icpText.nullable().optional(),
+    })
+    .optional(),
   icp: z.object({
     icps: z
       .array(
@@ -55,6 +67,11 @@ export const wayoAdsIcpSchema = z.object({
       .optional()
       .default([]),
   }),
+});
+
+export const wayoAdsIcpMatchQuerySchema = z.object({
+  onboardingId: z.string().trim().min(4).max(80),
+  requestId: z.string().trim().min(4).max(80).optional(),
 });
 
 export const wayoAdsCreatorQuerySchema = z.object({

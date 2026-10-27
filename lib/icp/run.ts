@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import {
@@ -13,6 +14,7 @@ import { UnrecoverableError } from "bullmq";
 import { searchQueriesForIcp } from "@/lib/icp/deepseek";
 import { reuseStoredCreators } from "@/lib/icp/reuse";
 import { upsertMatchedChannel } from "@/lib/icp/store";
+import { discardCreatorIfUnreachable } from "@/lib/creators/contact";
 import { YouTubeApiError, YouTubeClient, createYouTubeClient, type YouTubeChannel, type YouTubeVideoDetails } from "@/lib/youtube/client";
 import { selectRecentPublicVideos } from "@/lib/youtube/metrics";
 
@@ -41,14 +43,15 @@ export async function runMatchIcpChannels(processingJobId: string) {
       data: { searchQueries: analyzed.queries, analysisNote: analyzed.note || null },
     });
 
+    const target = channelTarget(brand.snapshot);
     const reused = await reuseStoredCreators({
       brandIcpId: brand.id,
       brandName: brand.brandName,
       snapshot: brand.snapshot,
       searchQueries: analyzed.queries,
-      limit: CHANNEL_TARGET,
+      limit: target,
     });
-    const remaining = Math.max(0, CHANNEL_TARGET - reused);
+    const remaining = Math.max(0, target - reused);
     const found = remaining > 0
       ? await findAudienceChannels(analyzed.queries, remaining)
       : { channels: [], inspected: 0, quotaStopped: false };
@@ -67,9 +70,28 @@ export async function runMatchIcpChannels(processingJobId: string) {
         create: { brandIcpId: brand.id, creatorId: creator.id },
         update: {},
       });
-      if (creator.channelIcp) continue;
+    }
+
+    await attachPublicEmails(brand.id);
+    const linked = await prisma.icpChannelMatch.findMany({
+      where: { brandIcpId: brand.id },
+      select: { creatorId: true },
+    });
+    for (const link of linked) {
+      const dropped = await discardCreatorIfUnreachable(link.creatorId);
+      if (dropped) logger.info("creator dropped, no email or social", { creatorId: link.creatorId });
+    }
+
+    const kept = await prisma.creator.findMany({
+      where: { channelIcp: { equals: Prisma.DbNull }, icpChannels: { some: { brandIcpId: brand.id } } },
+      select: { id: true, youtubeChannelId: true },
+    });
+    const byYoutube = new Map(found.channels.map((row) => [row.channel.id, row.channel]));
+    for (const creator of kept) {
+      const channel = byYoutube.get(creator.youtubeChannelId);
+      if (!channel) continue;
       try {
-        const profile = await writeChannelIcp(channel.channel);
+        const profile = await writeChannelIcp(channel);
         await prisma.creator.update({ where: { id: creator.id }, data: { channelIcp: profile } });
       } catch (error) {
         logger.error("channel icp failed", { creatorId: creator.id, message: error instanceof Error ? error.message : "unknown" });
@@ -77,7 +99,6 @@ export async function runMatchIcpChannels(processingJobId: string) {
     }
 
     const channelCount = await prisma.icpChannelMatch.count({ where: { brandIcpId: brand.id } });
-    await attachPublicEmails(brand.id);
     await prisma.brandIcp.update({
       where: { id: brand.id },
       data: {
@@ -116,6 +137,12 @@ export async function runMatchIcpChannels(processingJobId: string) {
 
 const SEARCH_RESULTS = 50;
 const CHANNEL_TARGET = 30;
+
+function channelTarget(snapshot: unknown) {
+  const raw = snapshot && typeof snapshot === "object" ? Number((snapshot as { maxChannels?: unknown }).maxChannels) : NaN;
+  if (Number.isFinite(raw) && raw >= 1 && raw <= 30) return Math.floor(raw);
+  return CHANNEL_TARGET;
+}
 
 async function attachPublicEmails(brandIcpId: string) {
   const pending = await prisma.creator.findMany({
