@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { assessEmail, isSameSite, normalizeEmail } from "@/lib/email/normalize";
 import { extractEmailsFromHtml, extractEmailsFromText } from "@/lib/email/extract";
-import { canTransitionEmailStatus, statusAfterSyntaxCheck, statusFromVerificationResult, transitionEmailStatus } from "@/lib/email/status";
+import { canTransitionEmailStatus, emailStatusLabel, statusAfterSyntaxCheck, statusFromVerificationResult, transitionEmailStatus } from "@/lib/email/status";
 import { chooseOfficialWebsite, classifyUrl, extractUrls } from "@/lib/email/website";
 import { hunterEmailsFromResponse, mapNeverBounceResult, mapZeroBounceStatus, verificationProviderFromEnv } from "@/lib/email/providers";
 import { EmailDiscoveryService } from "@/lib/email/discovery";
-import { pickPrimaryEmail } from "@/lib/creators/email";
+import { channelOriginLabel, emailOriginLabel, pickPrimaryEmail } from "@/lib/creators/email";
 
 describe("email normalization", () => {
   it("normalizes case and mailto query strings", () => {
@@ -52,6 +52,11 @@ describe("email extraction", () => {
 describe("email status", () => {
   it("keeps statuses distinct and blocks illegal jumps", () => {
     expect(statusAfterSyntaxCheck(true, false)).toBe("SYNTAX_VALID");
+    expect(emailStatusLabel("SYNTAX_VALID")).toBe("Found");
+    expect(emailStatusLabel("VERIFIED")).toBe("Verified");
+    expect(channelOriginLabel("YOUTUBE_SEARCH")).toBe("YouTube search");
+    expect(emailOriginLabel("CHANNEL_DESCRIPTION")).toBe("Channel description");
+    expect(emailOriginLabel("MAILTO")).toBe("Mailto link");
     expect(statusFromVerificationResult("valid")).toBe("VERIFIED");
     expect(canTransitionEmailStatus("SYNTAX_VALID", "VERIFIED")).toBe(true);
     expect(canTransitionEmailStatus("NOT_FOUND", "VERIFIED")).toBe(false);

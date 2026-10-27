@@ -24,7 +24,7 @@ function dateOrNull(value: string | null | undefined) {
 
 export async function saveDiscoveredChannel(
   channel: DiscoveredChannel,
-  meta: { niche?: string | null; source?: DiscoverySource },
+  meta: { source?: DiscoverySource },
 ) {
   const data = {
     channelName: channel.title || channel.id,
@@ -53,7 +53,6 @@ export async function saveDiscoveredChannel(
     matchedVideoPublishedAt: dateOrNull(channel.matchedVideo.publishedAt),
     relevanceScore: channel.relevanceScore,
     lastMetadataSyncAt: new Date(),
-    niche: meta.niche ?? null,
     discoverySource: meta.source ?? "YOUTUBE_SEARCH",
   } satisfies Prisma.CreatorUpdateInput;
 
@@ -85,7 +84,6 @@ export async function saveDiscoveredChannel(
         ...data,
         ...(channel.officialWebsiteUrl ? website : {}),
         ...(emailStatus ? { emailSearchStatus: emailStatus } : {}),
-        niche: existing.niche ?? meta.niche ?? null,
         hidden: false,
       },
     });
@@ -100,7 +98,6 @@ export async function saveDiscoveredChannel(
         ...data,
         ...website,
         ...(emailStatus ? { emailSearchStatus: emailStatus } : {}),
-        niche: meta.niche ?? null,
         discoveredAt: new Date(),
       },
     });

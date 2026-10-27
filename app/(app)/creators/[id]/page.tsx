@@ -5,9 +5,12 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { api } from "@/lib/client";
-import { formatDateTime, formatNumber } from "@/lib/utils";
+import { emailStatusLabel } from "@/lib/email/status";
+import { emailOriginLabel } from "@/lib/creators/email";
+import { countryName, formatDateTime, formatNumber } from "@/lib/utils";
 import type { CreatorRow, EmailRow } from "@/lib/types";
 import { ChannelAvatar } from "@/components/channel-avatar";
+import { ChannelIcpSection } from "@/components/channel-icp-section";
 import { Badge, statusTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -59,9 +62,14 @@ export default function CreatorDetailPage() {
         <Card>
           <CardHeader><CardTitle>Channel</CardTitle></CardHeader>
           <CardContent className="space-y-2 text-sm">
-            <p>Country: {creator.country || "Not provided by YouTube"}</p>
+            <p>Country: {countryName(creator.country) || "Not provided by YouTube"}</p>
             <p>Language: {creator.language || "Not provided"}</p>
-            <p>Niche: {creator.niche || "—"}</p>
+            <p className="break-words">
+              ICP: {(creator.icps ?? []).length > 0
+                ? (creator.icps ?? []).map((icp) => icp.brandName).join(", ")
+                : "Not linked"}
+            </p>
+            <ChannelIcpSection profile={creator.channelIcp} />
             <p>Handle: {creator.channelHandle || "Not provided"}</p>
             <p>Subscribers: {creator.subscriberVisibility === "PUBLIC" ? formatNumber(creator.subscriberCount) : creator.subscriberVisibility}</p>
             <p>Average views: {creator.averageViews == null ? "Unavailable" : formatNumber(creator.averageViews)}</p>
@@ -104,11 +112,11 @@ export default function CreatorDetailPage() {
             <article key={email.id} className="rounded-lg border p-3 text-sm">
               <div className="flex flex-wrap items-center gap-2">
                 <strong>{email.emailAddress}</strong>
-                <Badge tone={statusTone(email.verificationStatus)}>{email.verificationStatus}</Badge>
+                <Badge tone={statusTone(email.verificationStatus)}>{emailStatusLabel(email.verificationStatus)}</Badge>
                 <Badge tone="muted">{email.confidenceStatus}</Badge>
               </div>
               <p className="mt-2 text-muted-foreground">{email.provenanceNote}</p>
-              <p>Source: {email.sourceType} via {email.extractionMethod}</p>
+              <p>Email from: {emailOriginLabel(email.sourceType)}</p>
               {email.sourceUrl ? <p><a className="underline" href={email.sourceUrl} target="_blank" rel="noreferrer">{email.sourceUrl}</a></p> : null}
               <p>Page title: {email.pageTitle || "—"}</p>
               <p>Official domain: {email.isOnOfficialDomain ? "Yes" : "No"} · Generic inbox: {email.isGenericInbox ? "Yes" : "No"}</p>

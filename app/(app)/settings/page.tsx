@@ -25,29 +25,13 @@ export default function SettingsPage() {
   const [data, setData] = useState<Settings | null>(null);
   const [exportDays, setExportDays] = useState("30");
   const [creatorDays, setCreatorDays] = useState("0");
-  const [niches, setNiches] = useState<{ id: string; name: string; isSystem: boolean; keywords: string[] }[]>([]);
-
-  async function load() {
-    const [settings, nicheResult] = await Promise.all([
-      api<Settings>("/api/settings"),
-      api<{ niches: { id: string; name: string; isSystem: boolean; keywords: string[] }[] }>("/api/niches"),
-    ]);
-    setData(settings);
-    setExportDays(settings.settings.exportRetentionDays || "30");
-    setCreatorDays(settings.settings.creatorRetentionDays || "0");
-    setNiches(nicheResult.niches);
-  }
 
   useEffect(() => {
-    Promise.all([
-      api<Settings>("/api/settings"),
-      api<{ niches: { id: string; name: string; isSystem: boolean; keywords: string[] }[] }>("/api/niches"),
-    ])
-      .then(([settings, nicheResult]) => {
+    api<Settings>("/api/settings")
+      .then((settings) => {
         setData(settings);
         setExportDays(settings.settings.exportRetentionDays || "30");
         setCreatorDays(settings.settings.creatorRetentionDays || "0");
-        setNiches(nicheResult.niches);
       })
       .catch(() => undefined);
   }, []);
@@ -71,42 +55,6 @@ export default function SettingsPage() {
           <Status label={`Email verification (${data.integrations.verification.provider})`} ok={data.integrations.verification.configured} />
           <Status label={`Contact provider (${data.integrations.contactSearch.provider})`} ok={data.integrations.contactSearch.configured} />
           <p className="md:col-span-2 text-muted-foreground">Up to {data.integrations.limits.maxPagesPerDomain} pages per site, {data.integrations.limits.requestTimeoutMs} ms timeout, {data.integrations.limits.maxConcurrentJobs} concurrent jobs, {data.integrations.limits.youtubeDailyQuota} daily YouTube units tracked by this app.</p>
-        </CardContent>
-      </Card>
-      <Card>
-        <CardHeader><CardTitle>Niches</CardTitle></CardHeader>
-        <CardContent className="space-y-3">
-          {niches.map((niche) => (
-            <div key={niche.id} className="flex items-center justify-between gap-3 text-sm">
-              <span>{niche.name} <span className="text-muted-foreground">· {niche.keywords.join(", ")}</span></span>
-              {niche.isSystem ? <span className="text-xs text-muted-foreground">Built in</span> : <Button size="sm" variant="outline" onClick={async () => { await api(`/api/niches/${niche.id}`, { method: "DELETE" }); await load(); }}>Delete</Button>}
-            </div>
-          ))}
-          <form
-            className="flex flex-wrap gap-2"
-            onSubmit={async (event) => {
-              event.preventDefault();
-              const form = new FormData(event.currentTarget);
-              try {
-                await api("/api/niches", {
-                  method: "POST",
-                  body: JSON.stringify({
-                    name: String(form.get("name") || ""),
-                    keywords: String(form.get("keywords") || "").split(",").map((item) => item.trim()).filter(Boolean),
-                  }),
-                });
-                event.currentTarget.reset();
-                toast.success("Niche added");
-                await load();
-              } catch (error) {
-                toast.error(error instanceof Error ? error.message : "Could not add niche");
-              }
-            }}
-          >
-            <Input name="name" placeholder="Custom niche" required />
-            <Input name="keywords" placeholder="keyword one, keyword two" required className="min-w-64" />
-            <Button type="submit">Add niche</Button>
-          </form>
         </CardContent>
       </Card>
       {admin ? (

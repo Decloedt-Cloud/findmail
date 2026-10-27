@@ -31,6 +31,20 @@ export function transitionEmailStatus(from: EmailVerificationStatus, to: EmailVe
   return to;
 }
 
+const EMAIL_STATUS_LABELS: Record<EmailVerificationStatus, string> = {
+  DISCOVERED: "Found",
+  SYNTAX_VALID: "Found",
+  VERIFIED: "Verified",
+  INVALID: "Invalid",
+  UNKNOWN: "Unconfirmed",
+  NOT_FOUND: "No email",
+  NEEDS_REVIEW: "Needs review",
+};
+
+export function emailStatusLabel(status: string) {
+  return EMAIL_STATUS_LABELS[status as EmailVerificationStatus] ?? status.replaceAll("_", " ");
+}
+
 export function statusAfterSyntaxCheck(valid: boolean, ambiguous: boolean): EmailVerificationStatus {
   if (!valid) throw new Error("Invalid addresses are discarded and do not receive a status");
   if (ambiguous) return "NEEDS_REVIEW";

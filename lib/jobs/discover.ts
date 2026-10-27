@@ -1,10 +1,13 @@
 import { prisma } from "@/lib/db";
+import { writeChannelIcp } from "@/lib/icp/channel-icp";
+import { logger } from "@/lib/logger";
 import { fetchPublicPage, fetchPublicText } from "@/lib/email/crawl";
 import { EmailDiscoveryService, type EmailCandidate } from "@/lib/email/discovery";
 import { hunterProviderFromEnv } from "@/lib/email/providers";
 import { saveDiscoveredChannel } from "@/lib/creators/store";
 import { isCancelled, markRunning, recordJobError, refreshJobCounts, updateProgress } from "@/lib/jobs/progress";
 import { YouTubeApiError, createYouTubeClient, matchesSearchCountry, matchesSubscriberRange } from "@/lib/youtube/client";
+import type { SocialProfiles } from "@/lib/youtube/contacts";
 import { discoverYouTubeChannels, topicTier, type DiscoveredChannel, type DiscoveryProgress } from "@/lib/youtube/discovery";
 import { reuseLimit } from "@/lib/youtube/terms";
 
@@ -68,7 +71,18 @@ export async function runDiscoverCreators(jobId: string) {
       ? await prisma.jobItem.update({ where: { id: existingItem.id }, data: { status: "RUNNING", attempts: { increment: 1 } } })
       : await prisma.jobItem.create({ data: { jobId, externalKey: key, status: "RUNNING", attempts: 1 } });
     try {
-      const saved = await saveDiscoveredChannel(channel, { niche: search.niche, source: "YOUTUBE_SEARCH" });
+      const saved = await saveDiscoveredChannel(channel, { source: "YOUTUBE_SEARCH" });
+      if (!saved.creator.channelIcp) {
+        try {
+          const profile = await writeChannelIcp(channel);
+          await prisma.creator.update({ where: { id: saved.creator.id }, data: { channelIcp: profile } });
+        } catch (error) {
+          logger.error("channel icp failed", {
+            creatorId: saved.creator.id,
+            message: error instanceof Error ? error.message : "unknown",
+          });
+        }
+      }
       if (saved.duplicate) duplicates += 1;
       let foundEmails = channel.descriptionEmails.length;
       const onTopic = topicTier({
@@ -78,13 +92,14 @@ export async function runDiscoverCreators(jobId: string) {
         videoTitle: null,
         keywords: search.keywords,
       }) === "strong";
-      if (onTopic && channel.officialWebsiteUrl && channel.descriptionEmails.length === 0) {
+      const missingSocial = !saved.creator.instagramUrl || !saved.creator.twitterUrl || !saved.creator.tiktokUrl;
+      if (onTopic && channel.officialWebsiteUrl && (channel.descriptionEmails.length === 0 || missingSocial)) {
         const outcome = await service().discover({
           description: channel.description,
           channelUrl: saved.creator.channelUrl,
           existingWebsite: saved.creator.officialWebsiteUrl,
         });
-        foundEmails = await applyEmailOutcome(saved.creator.id, outcome.website, outcome.emails);
+        foundEmails = await applyEmailOutcome(saved.creator.id, outcome.website, outcome.emails, outcome.socials);
         if (foundEmails === 0) noEmail += 1;
       }
       await prisma.jobItem.update({
@@ -208,6 +223,7 @@ export async function applyEmailOutcome(
   creatorId: string,
   website: { officialWebsiteUrl: string | null; websiteStatus: "FOUND" | "UNAVAILABLE"; websiteEvidence: string },
   emails: EmailCandidate[],
+  socials?: SocialProfiles,
 ) {
   let created = 0;
   await prisma.$transaction(async (tx) => {
@@ -220,6 +236,9 @@ export async function applyEmailOutcome(
         officialWebsiteUrl: website.officialWebsiteUrl ?? current?.officialWebsiteUrl ?? null,
         websiteStatus: website.officialWebsiteUrl ? "FOUND" : keepWebsite ? current.websiteStatus : "UNAVAILABLE",
         websiteEvidence: website.officialWebsiteUrl || !keepWebsite ? website.websiteEvidence : current?.websiteEvidence,
+        ...(socials?.instagram && !current?.instagramUrl ? { instagramUrl: socials.instagram } : {}),
+        ...(socials?.twitter && !current?.twitterUrl ? { twitterUrl: socials.twitter } : {}),
+        ...(socials?.tiktok && !current?.tiktokUrl ? { tiktokUrl: socials.tiktok } : {}),
         emailSearchStatus: emails.length > 0
           ? (emails.some((email) => email.verificationStatus === "NEEDS_REVIEW") ? "NEEDS_REVIEW" : "FOUND")
           : hasStoredEmail
@@ -368,7 +387,7 @@ export async function runEmailDiscovery(jobId: string) {
         channelUrl: creator.channelUrl,
         existingWebsite: creator.officialWebsiteUrl,
       });
-      const created = await applyEmailOutcome(creator.id, outcome.website, outcome.emails);
+      const created = await applyEmailOutcome(creator.id, outcome.website, outcome.emails, outcome.socials);
       if (outcome.emails.length === 0) noEmail += 1;
       duplicates += Math.max(0, outcome.emails.length - created);
       await prisma.jobItem.update({

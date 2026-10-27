@@ -5,6 +5,21 @@ export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+const regionNames = new Intl.DisplayNames("en", { type: "region" });
+
+export function countryName(code: string | null | undefined) {
+  if (!code) return null;
+  const normalized = code.trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(normalized)) return code;
+  try {
+    const name = regionNames.of(normalized);
+    if (!name || name.toUpperCase() === normalized) return normalized;
+    return name;
+  } catch {
+    return normalized;
+  }
+}
+
 export function formatNumber(value: number | null | undefined) {
   if (value == null) return "—";
   return new Intl.NumberFormat("en-US").format(value);

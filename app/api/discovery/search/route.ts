@@ -35,7 +35,7 @@ export async function POST(request: Request) {
     if (consumed + estimate > daily) {
       throw new ApiError(429, `This search is estimated to use ${estimate} quota units and ${consumed} have already been recorded today. The configured daily budget is ${daily}.`);
     }
-    const name = input.name || `${input.niche || input.keywords[0]} · ${input.countries.join(", ")}`;
+    const name = input.name || `${input.keywords[0]} · ${input.countries.join(", ")}`;
     const job = await prisma.processingJob.create({
       data: {
         type: "DISCOVER_CREATORS",
@@ -49,7 +49,6 @@ export async function POST(request: Request) {
       data: {
         name,
         keywords: input.keywords,
-        niche: input.niche,
         countries: input.countries.map((country) => country.toUpperCase()),
         language: input.language,
         minSubscribers: input.minSubscribers,

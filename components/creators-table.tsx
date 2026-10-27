@@ -1,15 +1,20 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { flexRender } from "@tanstack/react-table";
 import { getCoreRowModel, legacyCreateColumnHelper, useLegacyTable } from "@tanstack/react-table/legacy";
 import { toast } from "sonner";
 import { api } from "@/lib/client";
-import { formatDate, formatNumber } from "@/lib/utils";
+import { emailStatusLabel } from "@/lib/email/status";
+import { countryName, formatNumber } from "@/lib/utils";
 import type { CreatorRow } from "@/lib/types";
 import { ChannelAvatar } from "@/components/channel-avatar";
+import { FilterMenu } from "@/components/filter-menu";
+import { IcpFilterSelect } from "@/components/icp-filter-select";
+import { SubscriberRangeField } from "@/components/subscriber-range-field";
+import { CreatorDetailDialog } from "@/components/creator-detail-dialog";
+import { IcpDetailDialog } from "@/components/icp-detail-dialog";
 import { Badge, statusTone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -17,11 +22,6 @@ import { Input, Select } from "@/components/ui/input";
 import { EmptyState, Skeleton } from "@/components/ui/feedback";
 
 const columnHelper = legacyCreateColumnHelper<CreatorRow>();
-
-function externalLink(href: string | null) {
-  if (!href) return "—";
-  return <a className="underline" href={href} target="_blank" rel="noreferrer">Open</a>;
-}
 
 export function CreatorsTable({ listId, onlyWithEmail = !listId }: { listId?: string; onlyWithEmail?: boolean }) {
   const router = useRouter();
@@ -31,7 +31,9 @@ export function CreatorsTable({ listId, onlyWithEmail = !listId }: { listId?: st
   const [pageSize] = useState(25);
   const [q, setQ] = useState("");
   const [country, setCountry] = useState("");
-  const [niche, setNiche] = useState("");
+  const [brandIcpId, setBrandIcpId] = useState("");
+  const [icpOptions, setIcpOptions] = useState<{ id: string; brandName: string; websiteUrl: string }[]>([]);
+  const [countryOptions, setCountryOptions] = useState<{ value: string; label: string }[]>([]);
   const [emailStatus, setEmailStatus] = useState("");
   const [minSubscribers, setMinSubscribers] = useState("");
   const [maxSubscribers, setMaxSubscribers] = useState("");
@@ -43,6 +45,8 @@ export function CreatorsTable({ listId, onlyWithEmail = !listId }: { listId?: st
   const [lists, setLists] = useState<{ id: string; name: string }[]>([]);
   const [listTarget, setListTarget] = useState("");
   const [confirm, setConfirm] = useState<"hide" | "delete" | null>(null);
+  const [openCreatorId, setOpenCreatorId] = useState<string | null>(null);
+  const [openIcpId, setOpenIcpId] = useState<string | null>(null);
 
   async function load(nextPage = page) {
     setLoading(true);
@@ -54,7 +58,7 @@ export function CreatorsTable({ listId, onlyWithEmail = !listId }: { listId?: st
     });
     if (q) params.set("q", q);
     if (country) params.set("country", country);
-    if (niche) params.set("niche", niche);
+    if (brandIcpId) params.set("brandIcpId", brandIcpId);
     if (emailStatus) params.set("emailStatus", emailStatus);
     if (minSubscribers) params.set("minSubscribers", minSubscribers);
     if (maxSubscribers) params.set("maxSubscribers", maxSubscribers);
@@ -73,41 +77,64 @@ export function CreatorsTable({ listId, onlyWithEmail = !listId }: { listId?: st
   }
 
   useEffect(() => {
-    const params = new URLSearchParams({ page: "1", pageSize: String(pageSize), sort, direction });
-    if (q) params.set("q", q);
-    if (country) params.set("country", country);
-    if (niche) params.set("niche", niche);
-    if (emailStatus) params.set("emailStatus", emailStatus);
-    if (minSubscribers) params.set("minSubscribers", minSubscribers);
-    if (maxSubscribers) params.set("maxSubscribers", maxSubscribers);
-    if (listId) params.set("listId", listId);
-    if (onlyWithEmail && !emailStatus) params.set("hasEmail", "true");
     let cancelled = false;
-    api<{ creators: CreatorRow[]; total: number }>(`/api/creators?${params.toString()}`)
-      .then((result) => {
-        if (cancelled) return;
-        setRows(result.creators);
-        setTotal(result.total);
-        setPage(1);
-        setLoading(false);
-      })
-      .catch((error: Error) => {
-        if (!cancelled) {
-          setLoading(false);
-          toast.error(error.message);
-        }
-      });
     api<{ lists: { id: string; name: string }[] }>("/api/contact-lists")
       .then((result) => {
         if (!cancelled) setLists(result.lists);
       })
       .catch(() => undefined);
+    api<{ icps: { id: string; brandName: string; websiteUrl: string }[] }>("/api/brand-icps")
+      .then((result) => {
+        if (!cancelled) setIcpOptions(result.icps);
+      })
+      .catch(() => undefined);
+    api<{ countries: string[] }>("/api/creators/facets")
+      .then((result) => {
+        if (cancelled) return;
+        setCountryOptions(
+          result.countries
+            .map((code) => ({ value: code, label: countryName(code) || code }))
+            .sort((left, right) => left.label.localeCompare(right.label)),
+        );
+      })
+      .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-    // Filter changes are applied from the form submit handler.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sort, direction, listId]);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      const params = new URLSearchParams({ page: "1", pageSize: String(pageSize), sort, direction });
+      if (q) params.set("q", q);
+      if (country) params.set("country", country);
+      if (brandIcpId) params.set("brandIcpId", brandIcpId);
+      if (emailStatus) params.set("emailStatus", emailStatus);
+      if (minSubscribers) params.set("minSubscribers", minSubscribers);
+      if (maxSubscribers) params.set("maxSubscribers", maxSubscribers);
+      if (listId) params.set("listId", listId);
+      if (onlyWithEmail && !emailStatus) params.set("hasEmail", "true");
+      api<{ creators: CreatorRow[]; total: number }>(`/api/creators?${params.toString()}`)
+        .then((result) => {
+          if (cancelled) return;
+          setRows(result.creators);
+          setTotal(result.total);
+          setPage(1);
+          setLoading(false);
+        })
+        .catch((error: Error) => {
+          if (!cancelled) {
+            setLoading(false);
+            toast.error(error.message);
+          }
+        });
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [q, country, brandIcpId, emailStatus, minSubscribers, maxSubscribers, sort, direction, listId, onlyWithEmail, pageSize]);
 
   const selectedIds = Object.entries(selection).filter(([, checked]) => checked).map(([id]) => id);
   const pageCount = Math.max(1, Math.ceil(total / pageSize));
@@ -116,6 +143,7 @@ export function CreatorsTable({ listId, onlyWithEmail = !listId }: { listId?: st
     () => [
       columnHelper.display({
         id: "select",
+        size: 48,
         header: () => (
           <input
             type="checkbox"
@@ -139,63 +167,49 @@ export function CreatorsTable({ listId, onlyWithEmail = !listId }: { listId?: st
       }),
       columnHelper.accessor("channelName", {
         header: "Channel",
+        size: 240,
         cell: (info) => (
           <div className="flex items-center gap-3">
             <ChannelAvatar url={info.row.original.thumbnailUrl} name={info.row.original.channelName} className="h-9 w-9" />
-            <div>
-              <Link href={`/creators/${info.row.original.id}`} className="font-medium hover:underline">{info.getValue()}</Link>
-              <p className="text-xs text-muted-foreground">{info.row.original.channelHandle || info.row.original.youtubeChannelId}</p>
+            <div className="min-w-0">
+              <button type="button" className="block max-w-56 cursor-pointer truncate text-left font-medium hover:underline" onClick={() => setOpenCreatorId(info.row.original.id)}>{info.getValue()}</button>
+              <p className="truncate text-xs text-muted-foreground">{info.row.original.channelHandle || info.row.original.youtubeChannelId}</p>
             </div>
           </div>
         ),
       }),
-      columnHelper.accessor("channelUrl", {
-        header: "YouTube",
-        cell: (info) => <a className="text-sm underline" href={info.getValue()} target="_blank" rel="noreferrer">Open</a>,
+      columnHelper.display({
+        id: "icp",
+        header: "ICP",
+        size: 140,
+        cell: ({ row }) => {
+          const icps = row.original.icps ?? [];
+          if (icps.length === 0) return "—";
+          return (
+            <div className="flex max-w-56 min-w-0 flex-col gap-1">
+              {icps.map((icp) => (
+                <button key={icp.id} type="button" className="block max-w-56 cursor-pointer truncate text-left hover:underline" title={icp.brandName} onClick={() => setOpenIcpId(icp.id)}>{icp.brandName}</button>
+              ))}
+            </div>
+          );
+        },
       }),
-      columnHelper.accessor("country", { header: "Country", cell: (info) => info.getValue() || "Not provided" }),
-      columnHelper.accessor("niche", { header: "Niche", cell: (info) => info.getValue() || "—" }),
+      columnHelper.accessor("country", {
+        header: "Country",
+        cell: (info) => countryName(info.getValue()) || "—",
+      }),
       columnHelper.accessor("subscriberCount", {
         header: () => <SortHeader label="Subscribers" active={sort === "subscribers"} direction={direction} onClick={() => toggleSort("subscribers")} />,
         cell: (info) => info.row.original.subscriberVisibility === "PUBLIC" ? formatNumber(info.getValue()) : info.row.original.subscriberVisibility === "HIDDEN" ? "Hidden" : "Unavailable",
       }),
-      columnHelper.accessor("averageViews", {
-        header: "Avg views",
-        cell: (info) => info.getValue() == null ? "—" : formatNumber(info.getValue()),
-      }),
-      columnHelper.accessor("lastActiveAt", {
-        header: "Last public video",
-        cell: (info) => info.getValue() ? formatDate(info.getValue()) : "—",
-      }),
-      columnHelper.accessor("officialWebsiteUrl", {
-        header: "website",
-        cell: (info) => info.getValue() ? <a className="underline" href={info.getValue()!} target="_blank" rel="noreferrer">Site</a> : "—",
-      }),
-      columnHelper.accessor("instagramUrl", {
-        header: "instagram",
-        cell: (info) => externalLink(info.getValue()),
-      }),
-      columnHelper.accessor("twitterUrl", {
-        header: "twitter",
-        cell: (info) => externalLink(info.getValue()),
-      }),
-      columnHelper.accessor("tiktokUrl", {
-        header: "tiktok",
-        cell: (info) => externalLink(info.getValue()),
-      }),
-      columnHelper.accessor("matchedVideoTitle", {
-        header: "matchedVideoTitle",
-        cell: (info) => {
-          const url = info.row.original.matchedVideoUrl;
-          const title = info.getValue();
-          if (!title && !url) return "—";
-          return url ? <a className="underline" href={url} target="_blank" rel="noreferrer">{title || url}</a> : title;
-        },
-      }),
       columnHelper.display({
         id: "email",
         header: "Public email",
-        cell: ({ row }) => row.original.primaryEmail?.emailAddress || null,
+        cell: ({ row }) => {
+          const email = row.original.primaryEmail?.emailAddress;
+          if (!email) return "—";
+          return <span className="block max-w-64 break-all" title={email}>{email}</span>;
+        },
       }),
       columnHelper.display({
         id: "status",
@@ -203,23 +217,15 @@ export function CreatorsTable({ listId, onlyWithEmail = !listId }: { listId?: st
         cell: ({ row }) => {
           const status = row.original.primaryEmail?.verificationStatus;
           if (!status) return null;
-          return <Badge tone={statusTone(status)}>{status.replaceAll("_", " ")}</Badge>;
+          return <Badge tone={statusTone(status)}>{emailStatusLabel(status)}</Badge>;
         },
-      }),
-      columnHelper.display({
-        id: "source",
-        header: "Source",
-        cell: ({ row }) => row.original.primaryEmail?.sourceType.replaceAll("_", " ") || row.original.discoverySource.replaceAll("_", " "),
-      }),
-      columnHelper.accessor("discoveredAt", {
-        header: () => <SortHeader label="Discovered" active={sort === "discoveredAt"} direction={direction} onClick={() => toggleSort("discoveredAt")} />,
-        cell: (info) => formatDate(info.getValue()),
       }),
       columnHelper.display({
         id: "actions",
         header: "Actions",
+        size: 168,
         cell: ({ row }) => (
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-1">
             <Button size="sm" variant="outline" onClick={() => setEvidence(row.original)}>Evidence</Button>
             <Button size="sm" variant="ghost" onClick={() => discover([row.original.id])}>Retry</Button>
           </div>
@@ -302,26 +308,26 @@ export function CreatorsTable({ listId, onlyWithEmail = !listId }: { listId?: st
 
   return (
     <div className="space-y-4">
-      <form
-        className="grid gap-2 md:grid-cols-6"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void load(1);
-        }}
-      >
+      <div className="grid gap-2 md:grid-cols-6">
         <Input value={q} onChange={(event) => setQ(event.target.value)} placeholder="Search name or email" className="md:col-span-2" />
-        <Input value={country} onChange={(event) => setCountry(event.target.value.toUpperCase())} placeholder="Country" maxLength={2} />
-        <Input value={niche} onChange={(event) => setNiche(event.target.value)} placeholder="Niche" />
-        <Select value={emailStatus} onChange={(event) => setEmailStatus(event.target.value)}>
-          <option value="">Any email status</option>
-          {["SYNTAX_VALID", "VERIFIED", "DISCOVERED", "UNKNOWN", "INVALID", "NEEDS_REVIEW", "NOT_FOUND"].map((status) => (
-            <option key={status} value={status}>{status.replaceAll("_", " ")}</option>
-          ))}
-        </Select>
-        <Button type="submit">Filter</Button>
-        <Input value={minSubscribers} onChange={(event) => setMinSubscribers(event.target.value)} placeholder="Min subscribers" type="number" />
-        <Input value={maxSubscribers} onChange={(event) => setMaxSubscribers(event.target.value)} placeholder="Max subscribers" type="number" />
-      </form>
+        <FilterMenu value={country} placeholder="Any country" options={countryOptions} onChange={setCountry} />
+        <FilterMenu
+          value={emailStatus}
+          placeholder="Any email status"
+          options={["SYNTAX_VALID", "VERIFIED", "UNKNOWN", "INVALID", "NEEDS_REVIEW", "NOT_FOUND"].map((status) => ({
+            value: status,
+            label: emailStatusLabel(status),
+          }))}
+          onChange={setEmailStatus}
+        />
+        <IcpFilterSelect value={brandIcpId} options={icpOptions} onChange={setBrandIcpId} />
+        <SubscriberRangeField
+          min={minSubscribers}
+          max={maxSubscribers}
+          onMinChange={setMinSubscribers}
+          onMaxChange={setMaxSubscribers}
+        />
+      </div>
       {selectedIds.length > 0 ? (
         <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-card p-3">
           <span className="text-sm">{selectedIds.length} selected</span>
@@ -337,15 +343,20 @@ export function CreatorsTable({ listId, onlyWithEmail = !listId }: { listId?: st
         </div>
       ) : null}
       {loading ? <Skeleton className="h-64" /> : rows.length === 0 ? (
-        <EmptyState title="No creators with a public email" body="A creator stays off this list until an email is written in a public description or page. Nothing is shown in its place." />
+        <EmptyState
+          title={onlyWithEmail ? "No creators with a public email" : "No creators"}
+          body={onlyWithEmail
+            ? "A creator stays off this list until an email is written in a public description or page. Nothing is shown in its place."
+            : "Creators appear here after a YouTube search or an ICP match."}
+        />
       ) : (
         <div className="overflow-x-auto rounded-xl border bg-card">
-          <table className="w-full min-w-[1100px] text-left text-sm">
+          <table className="w-full min-w-[40rem] text-left text-sm">
             <thead className="border-b bg-muted/60">
               {table.getHeaderGroups().map((group) => (
                 <tr key={group.id}>
                   {group.headers.map((header) => (
-                    <th key={header.id} className="px-3 py-3 font-medium">{flexRender(header.column.columnDef.header, header.getContext())}</th>
+                    <th key={header.id} className="whitespace-nowrap px-3 py-3 font-medium">{flexRender(header.column.columnDef.header, header.getContext())}</th>
                   ))}
                 </tr>
               ))}
@@ -370,16 +381,18 @@ export function CreatorsTable({ listId, onlyWithEmail = !listId }: { listId?: st
           <Button variant="outline" size="sm" disabled={page >= pageCount} onClick={() => void load(page + 1)}>Next</Button>
         </div>
       </div>
+      <CreatorDetailDialog creatorId={openCreatorId} onClose={() => setOpenCreatorId(null)} />
+      <IcpDetailDialog icpId={openIcpId} onClose={() => setOpenIcpId(null)} />
       <Dialog open={Boolean(evidence)} onOpenChange={(open) => !open && setEvidence(null)}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Extraction evidence</DialogTitle>
-            <DialogDescription>Only stored public sources are shown. A syntax check is not deliverability, and a published address is not consent.</DialogDescription>
+            <DialogDescription>Only stored public sources are shown. A published address is not consent.</DialogDescription>
           </DialogHeader>
           {evidence?.primaryEmail ? (
             <dl className="space-y-2 text-sm">
               <div><dt className="text-muted-foreground">Email</dt><dd>{evidence.primaryEmail.emailAddress}</dd></div>
-              <div><dt className="text-muted-foreground">Status</dt><dd>{evidence.primaryEmail.verificationStatus}</dd></div>
+              <div><dt className="text-muted-foreground">Status</dt><dd>{emailStatusLabel(evidence.primaryEmail.verificationStatus)}</dd></div>
               <div><dt className="text-muted-foreground">Method</dt><dd>{evidence.primaryEmail.extractionMethod}</dd></div>
               <div><dt className="text-muted-foreground">Source</dt><dd>{evidence.primaryEmail.sourceUrl ? <a className="underline" href={evidence.primaryEmail.sourceUrl} target="_blank" rel="noreferrer">{evidence.primaryEmail.sourceUrl}</a> : "—"}</dd></div>
               <div><dt className="text-muted-foreground">Page title</dt><dd>{evidence.primaryEmail.pageTitle || "—"}</dd></div>
@@ -410,7 +423,7 @@ export function CreatorsTable({ listId, onlyWithEmail = !listId }: { listId?: st
 
 function SortHeader({ label, active, direction, onClick }: { label: string; active: boolean; direction: "asc" | "desc"; onClick: () => void }) {
   return (
-    <button type="button" className="font-medium" onClick={onClick}>
+    <button type="button" className="cursor-pointer font-medium" onClick={onClick}>
       {label} {active ? (direction === "asc" ? "↑" : "↓") : ""}
     </button>
   );

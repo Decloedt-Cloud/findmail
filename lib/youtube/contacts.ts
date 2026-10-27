@@ -4,6 +4,25 @@ import { statusAfterSyntaxCheck } from "@/lib/email/status";
 import { chooseOfficialWebsite, extractUrls } from "@/lib/email/website";
 import type { EmailCandidate } from "@/lib/email/discovery";
 
+export type SocialProfiles = {
+  instagram: string | null;
+  twitter: string | null;
+  tiktok: string | null;
+};
+
+export function socialProfilesFromText(text: string): SocialProfiles {
+  const found = extractPublicContacts([text]);
+  return { instagram: found.instagram, twitter: found.twitter, tiktok: found.tiktok };
+}
+
+export function mergeSocialProfiles(current: SocialProfiles, next: SocialProfiles): SocialProfiles {
+  return {
+    instagram: current.instagram ?? next.instagram,
+    twitter: current.twitter ?? next.twitter,
+    tiktok: current.tiktok ?? next.tiktok,
+  };
+}
+
 export function extractPublicContacts(texts: string[]) {
   const text = texts.filter(Boolean).join("\n");
   const urls = extractUrls(text);

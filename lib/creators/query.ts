@@ -1,4 +1,5 @@
 import type { EmailVerificationStatus, Prisma } from "@prisma/client";
+import { readChannelIcp } from "@/lib/icp/channel-icp";
 import { prisma } from "@/lib/db";
 import { pickPrimaryEmail } from "@/lib/creators/email";
 import { matchesSearchCountry } from "@/lib/youtube/client";
@@ -6,12 +7,16 @@ import { topicTier } from "@/lib/youtube/discovery";
 
 export const creatorInclude = {
   emails: { orderBy: { discoveredAt: "desc" as const } },
+  icpChannels: {
+    select: { brandIcp: { select: { id: true, brandName: true } } },
+    orderBy: { createdAt: "desc" as const },
+  },
 } satisfies Prisma.CreatorInclude;
 
 export type CreatorFilters = {
   q?: string;
   country?: string;
-  niche?: string;
+  brandIcpId?: string;
   emailStatus?: string;
   minSubscribers?: number;
   maxSubscribers?: number;
@@ -34,7 +39,7 @@ export function creatorWhere(filters: CreatorFilters): Prisma.CreatorWhereInput 
     ];
   }
   if (filters.country) where.country = filters.country.toUpperCase();
-  if (filters.niche) where.niche = filters.niche;
+  if (filters.brandIcpId) where.icpChannels = { some: { brandIcpId: filters.brandIcpId } };
   if (filters.minSubscribers != null || filters.maxSubscribers != null) {
     where.subscriberCount = {
       ...(filters.minSubscribers != null ? { gte: filters.minSubscribers } : {}),
@@ -67,11 +72,20 @@ export function creatorOrder(sort: string, direction: "asc" | "desc"): Prisma.Cr
   return { discoveredAt: direction };
 }
 
-export function serializeCreator<T extends { viewCount: bigint | null; emails: Parameters<typeof pickPrimaryEmail>[0] }>(creator: T) {
+export function serializeCreator<
+  T extends {
+    viewCount: bigint | null;
+    emails: Parameters<typeof pickPrimaryEmail>[0];
+    icpChannels?: { brandIcp: { id: string; brandName: string } }[];
+  },
+>(creator: T) {
+  const { icpChannels, ...rest } = creator;
   return {
-    ...creator,
+    ...rest,
+    channelIcp: readChannelIcp("channelIcp" in creator ? creator.channelIcp : null),
     viewCount: creator.viewCount?.toString() ?? null,
     primaryEmail: pickPrimaryEmail(creator.emails),
+    icps: (icpChannels ?? []).map((link) => link.brandIcp),
   };
 }
 

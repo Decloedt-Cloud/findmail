@@ -1,13 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { api } from "@/lib/client";
 import { formatAgo, formatCompact } from "@/lib/utils";
 import type { CreatorRow } from "@/lib/types";
 import { ChannelAvatar } from "@/components/channel-avatar";
+import { CreatorDetailDialog } from "@/components/creator-detail-dialog";
 import { Button } from "@/components/ui/button";
 import { Select } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/feedback";
@@ -55,6 +55,7 @@ export function CreatorResultList({
   const router = useRouter();
   const visible = creators;
   const [selection, setSelection] = useState<Record<string, boolean>>({});
+  const [openCreatorId, setOpenCreatorId] = useState<string | null>(null);
   const selectedIds = visible.filter((creator) => selection[creator.id]).map((creator) => creator.id);
   const allSelected = visible.length > 0 && selectedIds.length === visible.length;
 
@@ -131,7 +132,7 @@ export function CreatorResultList({
               <ChannelAvatar url={creator.thumbnailUrl} name={creator.channelName} className="h-11 w-11" />
               <div className="min-w-0 flex-1 space-y-2">
                 <div>
-                  <Link href={`/creators/${creator.id}`} className="font-semibold hover:underline">{creator.channelName}</Link>
+                  <button type="button" className="text-left font-semibold hover:underline" onClick={() => setOpenCreatorId(creator.id)}>{creator.channelName}</button>
                   <p className="text-sm text-muted-foreground">{creator.channelHandle || creator.youtubeChannelId}</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
@@ -146,6 +147,15 @@ export function CreatorResultList({
                 ) : (
                   <p className="text-sm text-muted-foreground">No public email</p>
                 )}
+                {(creator.icps ?? []).length > 0 ? (
+                  <div className="flex min-w-0 flex-wrap gap-2">
+                    {(creator.icps ?? []).map((icp) => (
+                      <span key={icp.id} className="max-w-full truncate rounded-full border px-2.5 py-1 text-xs">
+                        ICP · {icp.brandName}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
                 {creator.matchedVideoTitle ? (
                   <p className="truncate text-sm text-muted-foreground">
                     Matched: {creator.matchedVideoTitle}
@@ -167,6 +177,7 @@ export function CreatorResultList({
         {!finished && visible.length > 0 ? <Skeleton className="h-16 rounded-2xl" /> : null}
       </div>
 
+      <CreatorDetailDialog creatorId={openCreatorId} onClose={() => setOpenCreatorId(null)} />
       {page && pageCount && pageCount > 1 && onPage ? (
         <div className="flex items-center justify-between text-sm">
           <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => onPage(page - 1)}>Previous</Button>

@@ -13,20 +13,17 @@ export async function GET(request: Request) {
       page: url.searchParams.get("page") ?? undefined,
       pageSize: url.searchParams.get("pageSize") ?? undefined,
       country: url.searchParams.get("country") ?? undefined,
-      niche: url.searchParams.get("niche") ?? undefined,
       q: url.searchParams.get("q") ?? undefined,
     });
     const where = {
       hidden: false,
       emails: { some: {} },
       ...(input.country ? { country: input.country.toUpperCase() } : {}),
-      ...(input.niche ? { niche: { equals: input.niche, mode: "insensitive" as const } } : {}),
       ...(input.q
         ? {
             OR: [
               { channelName: { contains: input.q, mode: "insensitive" as const } },
               { channelHandle: { contains: input.q, mode: "insensitive" as const } },
-              { niche: { contains: input.q, mode: "insensitive" as const } },
             ],
           }
         : {}),
@@ -46,7 +43,6 @@ export async function GET(request: Request) {
           channelUrl: true,
           description: true,
           country: true,
-          niche: true,
           keywords: true,
           subscriberCount: true,
           subscriberVisibility: true,

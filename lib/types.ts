@@ -16,6 +16,8 @@ export type EmailRow = {
   discoveredAt: string;
 };
 
+import type { ChannelIcp } from "@/lib/icp/channel-icp";
+
 export type CreatorRow = {
   id: string;
   youtubeChannelId: string;
@@ -33,7 +35,6 @@ export type CreatorRow = {
   officialWebsiteUrl: string | null;
   websiteStatus: string;
   websiteEvidence: string | null;
-  niche: string | null;
   discoverySource: string;
   emailSearchStatus: string;
   discoveredAt: string;
@@ -47,8 +48,10 @@ export type CreatorRow = {
   matchedVideoUrl: string | null;
   matchedVideoViews: number | null;
   matchedVideoPublishedAt: string | null;
+  channelIcp: ChannelIcp | null;
   primaryEmail: EmailRow | null;
   emails?: EmailRow[];
+  icps?: { id: string; brandName: string }[];
 };
 
 export type JobRow = {
