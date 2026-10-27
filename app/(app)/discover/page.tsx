@@ -38,6 +38,18 @@ export default function DiscoverPage() {
   const [resultTotal, setResultTotal] = useState(0);
   const [resultSort, setResultSort] = useState("relevance");
   const [resultsLoading, setResultsLoading] = useState(false);
+  const activeJobId = active?.jobId ?? null;
+  const resultsKey = activeJobId ? `${activeJobId}:${resultSort}` : "";
+  const [loadedResultsKey, setLoadedResultsKey] = useState(resultsKey);
+  if (resultsKey !== loadedResultsKey) {
+    setLoadedResultsKey(resultsKey);
+    if (resultsKey) {
+      setResults([]);
+      setResultTotal(0);
+      setLive(null);
+      setResultsLoading(true);
+    }
+  }
 
   function loadHome() {
     api<{ jobs: SearchJob[]; quota: { used: number; daily: number } }>("/api/discovery/jobs")
@@ -56,17 +68,13 @@ export default function DiscoverPage() {
   }, []);
 
   useEffect(() => {
-    if (!active) return;
+    if (!activeJobId) return;
     let cancelled = false;
     let timer = 0;
-    setResults([]);
-    setResultTotal(0);
-    setLive(null);
-    setResultsLoading(true);
 
     const pull = async () => {
       try {
-        const jobResult = await api<{ job: { status: string; progress: number; errorSummary: string | null; payload: { phase?: unknown; scanned?: unknown } | null; searchJob: { maxResults: number; quotaUsed: number } | null } }>(`/api/jobs/${active.jobId}`);
+        const jobResult = await api<{ job: { status: string; progress: number; errorSummary: string | null; payload: { phase?: unknown; scanned?: unknown } | null; searchJob: { maxResults: number; quotaUsed: number } | null } }>(`/api/jobs/${activeJobId}`);
         if (cancelled) return;
         const job = jobResult.job;
         const payload = job.payload ?? {};
@@ -86,7 +94,7 @@ export default function DiscoverPage() {
           errorSummary: job.errorSummary,
         });
         const params = new URLSearchParams({
-          jobId: active.jobId,
+          jobId: activeJobId,
           page: "1",
           pageSize: "100",
           sort: resultSort,
@@ -112,7 +120,7 @@ export default function DiscoverPage() {
       cancelled = true;
       window.clearTimeout(timer);
     };
-  }, [active?.jobId, resultSort]);
+  }, [activeJobId, resultSort]);
 
   const topicKeywords = topic.split(",").map((item) => item.trim()).filter(Boolean);
   const keywordCount = Math.max(1, topicKeywords.length);
@@ -144,7 +152,7 @@ export default function DiscoverPage() {
   async function findCreators() {
     const keywords = topic.split(",").map((item) => item.trim()).filter(Boolean).slice(0, 12);
     if (keywords.length === 0) {
-      toast.error("Enter a topic or niche");
+      toast.error("Enter a topic");
       return;
     }
     if (countries.length === 0) {
@@ -157,7 +165,6 @@ export default function DiscoverPage() {
         method: "POST",
         body: JSON.stringify({
           keywords,
-          niche: keywords.length === 1 ? keywords[0] : undefined,
           countries,
           minSubscribers: minSubscriberCount,
           maxSubscribers: maxSubscriberCount,
@@ -260,15 +267,15 @@ export default function DiscoverPage() {
           }}
         >
           <div>
-            <p className="text-xs font-semibold tracking-wide text-muted-foreground">TOPIC OR NICHE</p>
+            <p className="text-xs font-semibold tracking-wide text-muted-foreground">TOPIC</p>
             <Input
               className="mt-2 h-12 rounded-2xl"
               value={topic}
               onChange={(event) => setTopic(event.target.value)}
               placeholder="Gaming, AI tools, cooking..."
-              aria-label="Topic or niche"
+              aria-label="Topic"
             />
-            <p className="mt-2 text-sm text-muted-foreground">Search a topic or niche to find relevant YouTube creators</p>
+            <p className="mt-2 text-sm text-muted-foreground">Search a topic to find relevant YouTube creators</p>
           </div>
 
           <div>

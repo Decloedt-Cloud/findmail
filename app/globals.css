@@ -87,3 +87,98 @@ body {
 }
 
 button, a, input, select, textarea { outline-color: var(--ring); }
+
+.subscriber-range {
+  -webkit-appearance: none !important;
+  appearance: none !important;
+  width: 100%;
+  height: 8px;
+  background: transparent;
+  outline: none;
+}
+
+.subscriber-range::-webkit-slider-runnable-track {
+  height: 8px;
+  border-radius: 9999px;
+  background: linear-gradient(to right,
+      #F47A1F 0%,
+      #F47A1F var(--range-progress, 0%),
+      rgba(0, 0, 0, 0.28) var(--range-progress, 0%),
+      rgba(0, 0, 0, 0.28) 100%);
+}
+
+.dark .subscriber-range::-webkit-slider-runnable-track {
+  background: linear-gradient(to right,
+      #F47A1F 0%,
+      #F47A1F var(--range-progress, 0%),
+      rgba(255, 255, 255, 0.28) var(--range-progress, 0%),
+      rgba(255, 255, 255, 0.28) 100%);
+}
+
+.subscriber-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
+  width: 28px;
+  height: 28px;
+  margin-top: -10px;
+  border-radius: 50%;
+  background: #F47A1F;
+  border: 3px solid #ffffff;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.06),
+    0 4px 12px rgba(244, 122, 31, 0.35),
+    0 0 0 1px rgba(0, 0, 0, 0.04);
+  cursor: grab;
+}
+
+.dark .subscriber-range::-webkit-slider-thumb {
+  border-color: #0a0a0a;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.2),
+    0 4px 16px rgba(244, 122, 31, 0.45),
+    0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.subscriber-range::-webkit-slider-thumb:hover,
+.subscriber-range:focus::-webkit-slider-thumb {
+  transform: scale(1.1);
+}
+
+.subscriber-range::-webkit-slider-thumb:active {
+  cursor: grabbing;
+  transform: scale(1.15);
+}
+
+.subscriber-range::-moz-range-thumb {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #F47A1F;
+  border: 3px solid #ffffff;
+  box-shadow:
+    0 1px 2px rgba(0, 0, 0, 0.06),
+    0 4px 12px rgba(244, 122, 31, 0.35);
+  cursor: grab;
+}
+
+.dark .subscriber-range::-moz-range-thumb {
+  border-color: #0a0a0a;
+}
+
+.subscriber-range::-moz-range-track {
+  height: 8px;
+  border: none;
+  border-radius: 9999px;
+  background: rgba(0, 0, 0, 0.28);
+}
+
+.dark .subscriber-range::-moz-range-track {
+  background: rgba(255, 255, 255, 0.28);
+}
+
+.subscriber-range::-moz-range-progress {
+  height: 8px;
+  border-radius: 9999px;
+  background: #F47A1F;
+}

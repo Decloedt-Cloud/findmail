@@ -7,7 +7,6 @@ export const discoverySchema = z
   .object({
     name: z.string().trim().min(1).max(120).optional(),
     keywords: z.array(z.string().trim().min(1).max(80)).min(1).max(12),
-    niche: z.string().trim().min(1).max(80).optional(),
     countries: z.array(z.string().trim().regex(/^[A-Za-z]{2}$/)).min(1).max(8),
     language: z.string().trim().min(2).max(12).optional(),
     minSubscribers: z.number().int().min(MIN_CREATOR_SUBSCRIBERS).max(500_000_000).default(MIN_CREATOR_SUBSCRIBERS),
@@ -21,18 +20,54 @@ export const discoverySchema = z
     path: ["minSubscribers"],
   });
 
+const icpText = z.string().trim().max(500);
+
+export const wayoAdsIcpSchema = z.object({
+  onboardingId: z.string().trim().min(4).max(80),
+  websiteUrl: z.string().trim().url().max(300),
+  brandName: z.string().trim().min(1).max(120),
+  icp: z.object({
+    icps: z
+      .array(
+        z.object({
+          icpRef: z.string().trim().min(1).max(80),
+          name: icpText.min(1),
+          description: icpText,
+          interests: z.array(icpText).max(12),
+          problems: z.array(icpText).max(12),
+          goals: z.array(icpText).max(12),
+          useCases: z.array(icpText).max(12),
+          productCategories: z.array(icpText).max(12),
+        }),
+      )
+      .min(1)
+      .max(5),
+    offers: z
+      .array(
+        z.object({
+          offerRef: z.string().trim().min(1).max(80),
+          name: icpText.min(1),
+          description: icpText,
+          valueProposition: icpText.nullable(),
+        }),
+      )
+      .max(8)
+      .optional()
+      .default([]),
+  }),
+});
+
 export const wayoAdsCreatorQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
   pageSize: z.coerce.number().int().min(1).max(100).default(50),
   country: z.string().trim().regex(/^[A-Za-z]{2}$/).optional(),
-  niche: z.string().trim().min(1).max(80).optional(),
   q: z.string().trim().min(1).max(200).optional(),
 });
 
 export const creatorQuerySchema = z.object({
   q: z.string().trim().max(200).optional(),
   country: z.string().trim().max(8).optional(),
-  niche: z.string().trim().max(80).optional(),
+  brandIcpId: z.string().trim().min(1).max(80).optional(),
   emailStatus: z
     .enum(["DISCOVERED", "SYNTAX_VALID", "VERIFIED", "INVALID", "UNKNOWN", "NOT_FOUND", "NEEDS_REVIEW"])
     .optional(),
@@ -65,7 +100,6 @@ export const exportSchema = z.object({
     .object({
       q: z.string().optional(),
       country: z.string().optional(),
-      niche: z.string().optional(),
       emailStatus: z.string().optional(),
       minSubscribers: z.number().optional(),
       maxSubscribers: z.number().optional(),
@@ -86,11 +120,6 @@ export const listMembersSchema = z.object({
 export const mergeListsSchema = z.object({
   sourceListId: z.string().min(1),
   excludeDuplicateEmails: z.boolean().default(true),
-});
-
-export const nicheSchema = z.object({
-  name: z.string().trim().min(2).max(80),
-  keywords: z.array(z.string().trim().min(1).max(80)).min(1).max(12),
 });
 
 export const retentionSchema = z.object({

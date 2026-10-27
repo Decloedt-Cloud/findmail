@@ -19,7 +19,7 @@ export async function GET(request: Request) {
       prisma.emailContact.count({ where }),
       prisma.emailContact.findMany({
         where,
-        include: { creator: { select: { id: true, channelName: true, channelUrl: true, country: true, niche: true } } },
+        include: { creator: { select: { id: true, channelName: true, channelUrl: true, country: true } } },
         orderBy: { discoveredAt: "desc" },
         skip: (page - 1) * pageSize,
         take: pageSize,

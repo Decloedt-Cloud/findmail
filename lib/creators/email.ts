@@ -28,6 +28,23 @@ export function pickPrimaryEmail<T extends Pick<EmailContact, "verificationStatu
   })[0] ?? null;
 }
 
+export function channelOriginLabel(source: string) {
+  if (source === "YOUTUBE_SEARCH") return "YouTube search";
+  if (source === "CSV_IMPORT") return "CSV import";
+  if (source === "MANUAL") return "Added manually";
+  return source.replaceAll("_", " ");
+}
+
+export function emailOriginLabel(source: string) {
+  if (source === "CHANNEL_DESCRIPTION") return "Channel description";
+  if (source === "MAILTO") return "Mailto link";
+  if (source === "PUBLIC_PAGE") return "Public page";
+  if (source === "CSV_IMPORT") return "CSV import";
+  if (source === "LICENSED_PROVIDER") return "Contact provider";
+  if (source === "MANUAL") return "Added manually";
+  return source.replaceAll("_", " ");
+}
+
 export function provenanceNote(sourceType: string) {
   switch (sourceType) {
     case "CHANNEL_DESCRIPTION":

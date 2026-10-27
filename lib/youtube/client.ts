@@ -283,7 +283,7 @@ export class YouTubeClient {
         "playlistItems",
       ),
     );
-    const items: { videoId: string; publishedAt: string | null }[] = [];
+    const items: { videoId: string; title: string; publishedAt: string | null }[] = [];
     for (const item of Array.isArray(body.items) ? body.items : []) {
       const record = asRecord(item);
       const content = asRecord(record.contentDetails);
@@ -292,7 +292,11 @@ export class YouTubeClient {
       const videoId = String(content.videoId ?? resource.videoId ?? "");
       if (!videoId) continue;
       const published = content.videoPublishedAt ?? snippet.publishedAt;
-      items.push({ videoId, publishedAt: typeof published === "string" ? published : null });
+      items.push({
+        videoId,
+        title: String(snippet.title ?? ""),
+        publishedAt: typeof published === "string" ? published : null,
+      });
     }
     return items;
   }

@@ -22,53 +22,6 @@ export const ADDITIONAL_COUNTRIES = [
 
 export const ALL_COUNTRIES = [...TARGET_COUNTRIES, ...ADDITIONAL_COUNTRIES];
 
-export const SYSTEM_NICHES: { name: string; keywords: string[] }[] = [
-  {
-    name: "Artificial Intelligence",
-    keywords: ["artificial intelligence", "AI explained", "AI news"],
-  },
-  { name: "AI Tools", keywords: ["AI tools", "best AI tools", "AI apps"] },
-  {
-    name: "Machine Learning",
-    keywords: ["machine learning", "ML tutorial", "machine learning projects"],
-  },
-  {
-    name: "Generative AI",
-    keywords: ["generative AI", "ChatGPT tutorial", "AI image generation"],
-  },
-  {
-    name: "Software Development",
-    keywords: ["software development", "software engineering", "coding career"],
-  },
-  {
-    name: "Programming",
-    keywords: ["programming tutorial", "learn to code", "programming tips"],
-  },
-  { name: "SaaS", keywords: ["SaaS", "indie hacker", "build in public SaaS"] },
-  { name: "Business", keywords: ["business", "entrepreneur", "small business"] },
-  {
-    name: "Technology Reviews",
-    keywords: ["tech review", "gadget review", "technology reviews"],
-  },
-  {
-    name: "Developer Tools",
-    keywords: ["developer tools", "devtools", "programming tools"],
-  },
-  {
-    name: "Cloud Computing",
-    keywords: ["cloud computing", "AWS tutorial", "cloud engineering"],
-  },
-  {
-    name: "Data Science",
-    keywords: ["data science", "data analysis", "data science career"],
-  },
-  { name: "Robotics", keywords: ["robotics", "robots", "robotics projects"] },
-  {
-    name: "Cybersecurity",
-    keywords: ["cybersecurity", "ethical hacking", "infosec"],
-  },
-];
-
 export const EMAIL_STATUSES = [
   "DISCOVERED",
   "SYNTAX_VALID",

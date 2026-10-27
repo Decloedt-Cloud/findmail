@@ -1,0 +1,4 @@
+DROP INDEX IF EXISTS "Creator_niche_idx";
+ALTER TABLE "Creator" DROP COLUMN IF EXISTS "niche";
+ALTER TABLE "SearchJob" DROP COLUMN IF EXISTS "niche";
+DROP TABLE IF EXISTS "Niche";

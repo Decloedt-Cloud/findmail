@@ -2,6 +2,7 @@ import { extractEmailsFromHtml, extractEmailsFromText, pageTitle } from "@/lib/e
 import { isSameSite } from "@/lib/email/normalize";
 import { statusAfterSyntaxCheck, type EmailVerificationStatus } from "@/lib/email/status";
 import { candidateContactUrls, chooseOfficialWebsite, domainFromWebsite, extractUrls } from "@/lib/email/website";
+import { mergeSocialProfiles, socialProfilesFromText, type SocialProfiles } from "@/lib/youtube/contacts";
 import { pathAllowedByRobots, parseRobots, type RobotRules } from "@/lib/robots";
 
 export type PageFetchResult =
@@ -55,10 +56,11 @@ export class EmailDiscoveryService {
     description: string | null;
     channelUrl: string;
     existingWebsite?: string | null;
-  }): Promise<{ website: WebsiteDiscovery; emails: EmailCandidate[]; notes: string[] }> {
+  }): Promise<{ website: WebsiteDiscovery; emails: EmailCandidate[]; socials: SocialProfiles; notes: string[] }> {
     const notes: string[] = [];
     const website = this.websiteFromMetadata(input.description ?? "", input.existingWebsite);
     const emails: EmailCandidate[] = [];
+    let socials = socialProfilesFromText(input.description ?? "");
 
     for (const found of extractEmailsFromText(input.description ?? "")) {
       emails.push(
@@ -73,6 +75,7 @@ export class EmailDiscoveryService {
       const scanned = await this.scanSite(startUrl, notes);
       for (const page of scanned) {
         const title = pageTitle(page.body);
+        socials = mergeSocialProfiles(socials, socialProfilesFromText(page.body));
         for (const found of extractEmailsFromHtml(page.body)) {
           emails.push(
             this.toCandidate(
@@ -108,6 +111,7 @@ export class EmailDiscoveryService {
     const ambiguous = new Set(deduped.map((email) => email.normalizedEmail.split("@")[1])).size > 1;
     return {
       website,
+      socials,
       notes,
       emails: deduped.map((email) => ({
         ...email,

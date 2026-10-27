@@ -23,7 +23,6 @@ export function exportCells(
     youtubeChannelId: string;
     channelUrl: string;
     country: string | null;
-    niche: string | null;
     subscriberCount: number | null;
     subscriberVisibility: string;
     officialWebsiteUrl: string | null;
@@ -177,7 +176,6 @@ async function exportWhere(userId: string | null, scope: string, filters: Prisma
   const base = creatorWhere({
     q: body.q,
     country: body.country,
-    niche: body.niche,
     emailStatus: body.emailStatus,
     minSubscribers: body.minSubscribers,
     maxSubscribers: body.maxSubscribers,

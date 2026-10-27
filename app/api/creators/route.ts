@@ -12,7 +12,7 @@ export async function GET(request: Request) {
       {
         q: input.q,
         country: input.country,
-        niche: input.niche,
+        brandIcpId: input.brandIcpId,
         emailStatus: input.emailStatus,
         minSubscribers: input.minSubscribers,
         maxSubscribers: input.maxSubscribers,

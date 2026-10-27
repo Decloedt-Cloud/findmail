@@ -29,11 +29,15 @@ export async function enqueueProcessingJob(processingJobId: string) {
     });
     throw new Error("REDIS_URL is not configured");
   }
+  const processingJob = await prisma.processingJob.findUnique({
+    where: { id: processingJobId },
+    select: { type: true },
+  });
   const bullJob = await queue.add(
     "process",
     { processingJobId },
     {
-      attempts: 3,
+      attempts: processingJob?.type === "MATCH_ICP_CHANNELS" ? 1 : 3,
       backoff: { type: "exponential", delay: 2000 },
       removeOnComplete: 1000,
       removeOnFail: 500,

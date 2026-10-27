@@ -1,6 +1,7 @@
 import { unlink } from "node:fs/promises";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { runMatchIcpChannels } from "@/lib/icp/run";
 import { runDiscoverCreators, runEmailDiscovery } from "@/lib/jobs/discover";
 import { runExport } from "@/lib/jobs/export";
 import { runImport } from "@/lib/jobs/import";
@@ -53,6 +54,9 @@ export async function runProcessingJob(processingJobId: string) {
       return;
     case "EXPORT_RESULTS":
       await runExport(processingJobId);
+      return;
+    case "MATCH_ICP_CHANNELS":
+      await runMatchIcpChannels(processingJobId);
       return;
     default:
       throw new Error(`Unknown job type: ${job.type}`);

@@ -10,7 +10,6 @@ const creator = {
   channelUrl: "https://www.youtube.com/channel/UC1",
   description: "Public channel description",
   country: "FR",
-  niche: "Business",
   keywords: ["business"],
   subscriberCount: 1200,
   subscriberVisibility: "PUBLIC",

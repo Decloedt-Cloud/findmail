@@ -6,6 +6,7 @@ import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Too
 import { api } from "@/lib/client";
 import { formatDateTime, formatNumber } from "@/lib/utils";
 import { Badge, statusTone } from "@/components/ui/badge";
+import { CreatorDetailDialog } from "@/components/creator-detail-dialog";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState, Skeleton } from "@/components/ui/feedback";
 
@@ -13,12 +14,11 @@ type Overview = {
   cards: Record<string, number>;
   creatorsPerDay: { date: string; count: number }[];
   emailsPerDay: { date: string; count: number }[];
-  emailsByNiche: { niche: string; creators: number; withEmail: number; rate: number }[];
   creatorsByCountry: { country: string; count: number }[];
   subscriberRanges: { range: string; count: number }[];
   sources: { source: string; count: number }[];
   recentJobs: { id: string; name: string; status: string; progress: number; createdAt: string }[];
-  latestCreators: { id: string; channelName: string; country: string | null; niche: string | null; discoveredAt: string }[];
+  latestCreators: { id: string; channelName: string; country: string | null; discoveredAt: string }[];
   recentExports: { id: string; fileName: string; status: string; rowCount: number; createdAt: string }[];
 };
 
@@ -36,6 +36,7 @@ const CARDS = [
 export default function DashboardPage() {
   const [data, setData] = useState<Overview | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [openCreatorId, setOpenCreatorId] = useState<string | null>(null);
 
   useEffect(() => {
     api<Overview>("/api/analytics/overview")
@@ -100,17 +101,6 @@ export default function DashboardPage() {
             </LineChart>
           </ResponsiveContainer>
         </ChartCard>
-        <ChartCard title="Email discovery rate by niche">
-          <ResponsiveContainer width="100%" height={240}>
-            <BarChart data={data.emailsByNiche}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="niche" tick={{ fontSize: 11 }} interval={0} angle={-20} height={70} />
-              <YAxis />
-              <Tooltip />
-              <Bar dataKey="rate" fill="var(--primary)" />
-            </BarChart>
-          </ResponsiveContainer>
-        </ChartCard>
         <ChartCard title="Creators by country">
           <ResponsiveContainer width="100%" height={240}>
             <BarChart data={data.creatorsByCountry}>
@@ -161,10 +151,10 @@ export default function DashboardPage() {
           <CardHeader><CardTitle>Latest creators</CardTitle></CardHeader>
           <CardContent className="space-y-3">
             {data.latestCreators.length === 0 ? <p className="text-sm text-muted-foreground">No creators yet.</p> : data.latestCreators.map((creator) => (
-              <Link key={creator.id} href={`/creators/${creator.id}`} className="block rounded-lg border p-3 hover:bg-accent">
+              <button key={creator.id} type="button" className="block w-full rounded-lg border p-3 text-left hover:bg-accent" onClick={() => setOpenCreatorId(creator.id)}>
                 <p className="truncate text-sm font-medium">{creator.channelName}</p>
-                <p className="text-xs text-muted-foreground">{creator.country || "Country not provided"} · {creator.niche || "No niche"}</p>
-              </Link>
+                <p className="text-xs text-muted-foreground">{creator.country || "Country not provided"}</p>
+              </button>
             ))}
           </CardContent>
         </Card>
@@ -180,6 +170,7 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
       </section>
+      <CreatorDetailDialog creatorId={openCreatorId} onClose={() => setOpenCreatorId(null)} />
     </div>
   );
 }

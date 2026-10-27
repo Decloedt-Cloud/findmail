@@ -89,6 +89,7 @@ enum JobType {
   EXTRACT_EMAILS
   VERIFY_EMAILS
   EXPORT_RESULTS
+  MATCH_ICP_CHANNELS
 }
 
 enum ExportScope {
@@ -123,17 +124,6 @@ model User {
   searchJobs   SearchJob[]
 }
 
-model Niche {
-  id        String   @id @default(cuid())
-  name      String   @unique
-  keywords  String[]
-  isSystem  Boolean  @default(false)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@index([name])
-}
-
 model Creator {
   id                   String                @id @default(cuid())
   youtubeChannelId     String                @unique
@@ -152,7 +142,6 @@ model Creator {
   officialWebsiteUrl   String?
   websiteStatus        WebsiteStatus         @default(UNKNOWN)
   websiteEvidence      String?               @db.Text
-  niche                String?
   keywords             String[]
   discoverySource      DiscoverySource       @default(YOUTUBE_SEARCH)
   emailSearchStatus    EmailSearchStatus     @default(NOT_SEARCHED)
@@ -167,6 +156,7 @@ model Creator {
   matchedVideoUrl      String?
   matchedVideoViews    Int?
   matchedVideoPublishedAt DateTime?
+  channelIcp           Json?
   relevanceScore       Int                   @default(0)
   hidden               Boolean               @default(false)
   discoveredAt         DateTime              @default(now())
@@ -176,9 +166,9 @@ model Creator {
   emails               EmailContact[]
   listMembers          ContactListMember[]
   jobItems             JobItem[]
+  icpChannels          IcpChannelMatch[]
 
   @@index([country])
-  @@index([niche])
   @@index([subscriberCount])
   @@index([discoveredAt])
   @@index([hidden])
@@ -217,7 +207,6 @@ model SearchJob {
   id                  String         @id @default(cuid())
   name                String
   keywords            String[]
-  niche               String?
   countries           String[]
   language            String?
   minSubscribers      Int?
@@ -280,6 +269,7 @@ model ProcessingJob {
   searchJob           SearchJob?
   importBatch         ImportBatch?
   exportRecord        ExportRecord?
+  brandIcp            BrandIcp?
 
   @@index([status])
   @@index([type])
@@ -420,6 +410,43 @@ model DedupEvent {
   createdAt DateTime @default(now())
 
   @@index([kind, createdAt])
+}
+
+/// Simplified advertiser ICP received from Wayo Ads, plus the channels found for it.
+model BrandIcp {
+  id                  String         @id @default(cuid())
+  wayoOnboardingId    String
+  websiteUrl          String
+  brandName           String
+  snapshot            Json
+  searchQueries       String[]
+  analysisNote        String?        @db.Text
+  status              JobStatus      @default(QUEUED)
+  matchedChannelCount Int            @default(0)
+  errorSummary        String?        @db.Text
+  processingJobId     String?        @unique
+  processingJob       ProcessingJob? @relation(fields: [processingJobId], references: [id], onDelete: SetNull)
+  channels            IcpChannelMatch[]
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  @@index([wayoOnboardingId])
+  @@index([websiteUrl])
+  @@index([status])
+  @@index([createdAt])
+}
+
+/// A YouTube channel kept for one simplified ICP. The video search is not stored.
+model IcpChannelMatch {
+  id         String   @id @default(cuid())
+  brandIcpId String
+  brandIcp   BrandIcp @relation(fields: [brandIcpId], references: [id], onDelete: Cascade)
+  creatorId  String
+  creator    Creator  @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([brandIcpId, creatorId])
+  @@index([creatorId])
 }
 
 model AppSetting {

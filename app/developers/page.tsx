@@ -42,8 +42,7 @@ export default function DevelopersPage() {
             <tr className="border-b border-border"><td className="py-2 pr-3">page</td><td className="py-2 pr-3">1</td><td className="py-2">Page number, starting at 1</td></tr>
             <tr className="border-b border-border"><td className="py-2 pr-3">pageSize</td><td className="py-2 pr-3">50</td><td className="py-2">1 to 100 creators</td></tr>
             <tr className="border-b border-border"><td className="py-2 pr-3">country</td><td className="py-2 pr-3"></td><td className="py-2">Two-letter code, for example FR</td></tr>
-            <tr className="border-b border-border"><td className="py-2 pr-3">niche</td><td className="py-2 pr-3"></td><td className="py-2">Exact niche name, case-insensitive</td></tr>
-            <tr><td className="py-2 pr-3">q</td><td className="py-2 pr-3"></td><td className="py-2">Channel name, handle, or niche</td></tr>
+            <tr><td className="py-2 pr-3">q</td><td className="py-2 pr-3"></td><td className="py-2">Channel name or handle</td></tr>
           </tbody>
         </table>
         <pre className="overflow-x-auto rounded-lg bg-card p-4 text-sm">{`curl "https://wayoadsoutreach.wayo.agency/api/integrations/wayo-ads/creators?country=FR&pageSize=50" \\
@@ -61,7 +60,6 @@ export default function DevelopersPage() {
     "channelHandle": "@ada",
     "channelUrl": "https://www.youtube.com/channel/UC1",
     "country": "FR",
-    "niche": "Business",
     "subscriberCount": 1200,
     "viewCount": "3400",
     "officialWebsiteUrl": "https://ada.test",

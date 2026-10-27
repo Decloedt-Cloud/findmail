@@ -1,8 +1,6 @@
 import "../lib/load-env";
 import { hash } from "bcryptjs";
 import { PrismaClient } from "@prisma/client";
-import { SYSTEM_NICHES } from "../lib/constants";
-
 const prisma = new PrismaClient();
 
 async function main() {
@@ -17,13 +15,6 @@ async function main() {
     update: { passwordHash, role: "ADMIN", name: "Wayo Ads Admin" },
     create: { email, passwordHash, role: "ADMIN", name: "Wayo Ads Admin" },
   });
-  for (const niche of SYSTEM_NICHES) {
-    await prisma.niche.upsert({
-      where: { name: niche.name },
-      update: { keywords: niche.keywords, isSystem: true },
-      create: { name: niche.name, keywords: niche.keywords, isSystem: true },
-    });
-  }
   await prisma.appSetting.upsert({
     where: { key: "exportRetentionDays" },
     update: {},
@@ -34,7 +25,7 @@ async function main() {
     update: {},
     create: { key: "creatorRetentionDays", value: "0" },
   });
-  console.log(`Seeded admin ${email} and ${SYSTEM_NICHES.length} niches. No sample creators were created.`);
+  console.log(`Seeded admin ${email}. No sample creators were created.`);
 }
 
 main()

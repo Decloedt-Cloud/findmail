@@ -2,7 +2,6 @@ import { prisma } from "@/lib/db";
 
 type CountRow = { count: number };
 type DayRow = { day: Date; count: number };
-type NicheRow = { niche: string; creators: number; with_email: number };
 type LabelRow = { label: string; count: number };
 type RangeRow = {
   unknown: number;
@@ -30,7 +29,6 @@ export async function analyticsOverview() {
     activeJobs,
     creatorsPerDay,
     emailsPerDay,
-    niches,
     countries,
     ranges,
     sources,
@@ -67,16 +65,6 @@ export async function analyticsOverview() {
       INNER JOIN "Creator" c ON c.id = e."creatorId"
       WHERE c.hidden = false AND e."discoveredAt" >= ${since}
       GROUP BY 1 ORDER BY 1
-    `,
-    prisma.$queryRaw<NicheRow[]>`
-      SELECT COALESCE(NULLIF(c.niche, ''), 'Unspecified') AS niche,
-             COUNT(*)::int AS creators,
-             COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM "EmailContact" e WHERE e."creatorId" = c.id))::int AS with_email
-      FROM "Creator" c
-      WHERE c.hidden = false
-      GROUP BY 1
-      ORDER BY creators DESC
-      LIMIT 12
     `,
     prisma.$queryRaw<LabelRow[]>`
       SELECT COALESCE(NULLIF(country, ''), 'Not provided') AS label, COUNT(*)::int AS count
@@ -122,12 +110,6 @@ export async function analyticsOverview() {
     },
     creatorsPerDay: creatorsPerDay.map((row) => ({ date: row.day.toISOString().slice(0, 10), count: num(row.count) })),
     emailsPerDay: emailsPerDay.map((row) => ({ date: row.day.toISOString().slice(0, 10), count: num(row.count) })),
-    emailsByNiche: niches.map((row) => ({
-      niche: row.niche,
-      creators: num(row.creators),
-      withEmail: num(row.with_email),
-      rate: num(row.creators) === 0 ? 0 : Math.round((num(row.with_email) / num(row.creators)) * 100),
-    })),
     creatorsByCountry: countries.map((row) => ({ country: row.label, count: num(row.count) })),
     subscriberRanges: [
       { range: "Not public", count: num(range?.unknown) },

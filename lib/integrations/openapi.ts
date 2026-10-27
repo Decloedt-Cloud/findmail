@@ -32,7 +32,6 @@ export const wayoAdsOpenApi = {
           channelUrl: { type: "string" },
           description: { type: "string", nullable: true },
           country: { type: "string", nullable: true, description: "ISO 3166-1 alpha-2, only when YouTube provided it." },
-          niche: { type: "string", nullable: true },
           keywords: { type: "array", items: { type: "string" } },
           subscriberCount: { type: "integer", nullable: true },
           subscriberVisibility: { type: "string", enum: ["PUBLIC", "HIDDEN", "UNAVAILABLE"] },
@@ -72,8 +71,7 @@ export const wayoAdsOpenApi = {
           { name: "page", in: "query", schema: { type: "integer", minimum: 1, default: 1 } },
           { name: "pageSize", in: "query", schema: { type: "integer", minimum: 1, maximum: 100, default: 50 } },
           { name: "country", in: "query", schema: { type: "string", pattern: "^[A-Za-z]{2}$" }, description: "ISO country code, for example FR." },
-          { name: "niche", in: "query", schema: { type: "string" } },
-          { name: "q", in: "query", schema: { type: "string" }, description: "Matches channel name, handle, or niche." },
+          { name: "q", in: "query", schema: { type: "string" }, description: "Matches channel name or handle." },
         ],
         responses: {
           "200": {
@@ -89,6 +87,18 @@ export const wayoAdsOpenApi = {
           "401": { description: "Missing or wrong API key", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           "429": { description: "More than 60 requests in 60 seconds", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
           "503": { description: "API key is not configured on the server", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+        },
+      },
+    },
+    "/api/integrations/wayo-ads/icps": {
+      post: {
+        operationId: "matchIcp",
+        summary: "Store a simplified ICP and queue a search for YouTube channels that published a matching video in the last 6 months",
+        responses: {
+          "202": { description: "Matching was queued" },
+          "200": { description: "This onboarding ICP is already queued or finished" },
+          "400": { description: "Invalid body", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
+          "401": { description: "Missing or wrong API key", content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } } },
         },
       },
     },
