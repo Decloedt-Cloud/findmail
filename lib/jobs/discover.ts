@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { writeChannelIcp } from "@/lib/icp/channel-icp";
+import { discardCreatorIfUnreachable } from "@/lib/creators/contact";
 import { logger } from "@/lib/logger";
 import { fetchPublicPage, fetchPublicText } from "@/lib/email/crawl";
 import { EmailDiscoveryService, type EmailCandidate } from "@/lib/email/discovery";
@@ -100,7 +101,14 @@ export async function runDiscoverCreators(jobId: string) {
           existingWebsite: saved.creator.officialWebsiteUrl,
         });
         foundEmails = await applyEmailOutcome(saved.creator.id, outcome.website, outcome.emails, outcome.socials);
-        if (foundEmails === 0) noEmail += 1;
+      }
+      if (await discardCreatorIfUnreachable(saved.creator.id)) {
+        noEmail += 1;
+        await prisma.jobItem.update({
+          where: { id: item.id },
+          data: { status: "COMPLETED", creatorId: null, result: { dropped: "no-email-or-social" } },
+        });
+        return;
       }
       await prisma.jobItem.update({
         where: { id: item.id },

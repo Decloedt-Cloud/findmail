@@ -41,6 +41,12 @@ export async function reuseStoredCreators(input: {
       country: { in: ICP_COUNTRIES },
       subscriberVisibility: "PUBLIC",
       subscriberCount: { gte: ICP_MIN_SUBSCRIBERS, lte: ICP_MAX_SUBSCRIBERS },
+      OR: [
+        { emails: { some: {} } },
+        { instagramUrl: { not: null } },
+        { twitterUrl: { not: null } },
+        { tiktokUrl: { not: null } },
+      ],
     },
     orderBy: { updatedAt: "desc" },
     take: CANDIDATE_LIMIT,
