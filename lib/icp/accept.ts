@@ -33,7 +33,7 @@ async function queueBrand(input: IcpInput, existingId: string | null, snapshot: 
   const job = await prisma.processingJob.create({
     data: {
       type: "MATCH_ICP_CHANNELS",
-      name: `ICP ${input.brandName}`.slice(0, 120),
+      name: (input.stage === "complex" ? `ICP match ${input.brandName}` : `ICP ${input.brandName}`).slice(0, 120),
       payload: { onboardingId: input.onboardingId, requestId: input.requestId ?? null },
       totalRecords: snapshot.maxChannels,
     },
@@ -100,20 +100,15 @@ export async function acceptWayoIcp(input: IcpInput) {
     if (same && isHealthyIcp(same)) {
       return { id: same.id, status: same.status, queued: false as const };
     }
-    const other = copies.find((row) => row.id !== same?.id && isHealthyIcp(row));
-    if (other) {
-      return { id: other.id, status: other.status, queued: false as const };
-    }
-    return queueBrand(input, same?.id ?? copies[0]?.id ?? null, buildSnapshot(input, maxChannels));
+    return queueBrand(input, same?.id ?? null, buildSnapshot(input, maxChannels));
   }
 
   const simplified = copies.filter((row) => snapshotRequestId(row.snapshot) === "");
-  const pool = simplified.length > 0 ? simplified : copies;
-  const kept = pool.find((row) => row.status === "COMPLETED" && row.matchedChannelCount > 0)
-    ?? pool.find((row) => row.status === "QUEUED" || row.status === "RUNNING");
+  const kept = simplified.find((row) => row.status === "COMPLETED" && row.matchedChannelCount > 0)
+    ?? simplified.find((row) => row.status === "QUEUED" || row.status === "RUNNING");
   if (kept) {
     return { id: kept.id, status: kept.status, queued: false as const };
   }
 
-  return queueBrand(input, pool[0]?.id ?? null, buildSnapshot(input, maxChannels));
+  return queueBrand(input, simplified[0]?.id ?? null, buildSnapshot(input, maxChannels));
 }
