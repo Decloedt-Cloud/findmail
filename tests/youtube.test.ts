@@ -20,10 +20,29 @@ function jsonResponse(body: unknown, status = 200) {
   return { ok: status < 400, status, json: async () => body };
 }
 
+const RECENT_PUBLISHED = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+
+function recentActivity(pathname: string) {
+  if (pathname.endsWith("/playlistItems")) {
+    return jsonResponse({
+      items: [{ contentDetails: { videoId: "recent", videoPublishedAt: RECENT_PUBLISHED } }],
+    });
+  }
+  return jsonResponse({
+    items: [{
+      id: "recent",
+      snippet: { title: "Recent", publishedAt: RECENT_PUBLISHED, liveBroadcastContent: "none" },
+      statistics: { viewCount: "500000" },
+      status: { privacyStatus: "public" },
+    }],
+  });
+}
+
 describe("youtube pagination and dedupe", () => {
   it("follows page tokens and collapses repeated channel ids", async () => {
     const fetchImpl = vi.fn(async (url: string) => {
       const parsed = new URL(url);
+      if (parsed.pathname.endsWith("/playlistItems") || parsed.pathname.endsWith("/videos")) return recentActivity(parsed.pathname);
       if (parsed.pathname.endsWith("/search")) {
         if (!parsed.searchParams.get("pageToken")) {
           return jsonResponse({
@@ -40,7 +59,7 @@ describe("youtube pagination and dedupe", () => {
       }
       return jsonResponse({
         items: [
-          { id: "UC1", snippet: { title: "AI One", country: "US" }, statistics: { subscriberCount: "1000", hiddenSubscriberCount: false } },
+          { id: "UC1", snippet: { title: "AI One", country: "US" }, statistics: { subscriberCount: "1000", hiddenSubscriberCount: false }, contentDetails: { relatedPlaylists: { uploads: "UUUC1" } } },
           { id: "UC2", snippet: { title: "Two", country: "FR" }, statistics: { hiddenSubscriberCount: true } },
         ],
       });
@@ -58,6 +77,7 @@ describe("youtube pagination and dedupe", () => {
     const foreign = ["US1", "US2", "US3", "US4", "US5"];
     const fetchImpl = vi.fn(async (url: string) => {
       const parsed = new URL(url);
+      if (parsed.pathname.endsWith("/playlistItems") || parsed.pathname.endsWith("/videos")) return recentActivity(parsed.pathname);
       if (parsed.pathname.endsWith("/search")) {
         if (!parsed.searchParams.get("pageToken")) {
           return jsonResponse({
@@ -79,6 +99,7 @@ describe("youtube pagination and dedupe", () => {
             country: id === "FR1" ? "FR" : "US",
           },
           statistics: { subscriberCount: "1000", hiddenSubscriberCount: false },
+          contentDetails: { relatedPlaylists: { uploads: `UU${id}` } },
         })),
       });
     });
@@ -94,6 +115,7 @@ describe("youtube pagination and dedupe", () => {
     const offTopic = ["A", "B", "C", "D", "E"];
     const fetchImpl = vi.fn(async (url: string) => {
       const parsed = new URL(url);
+      if (parsed.pathname.endsWith("/playlistItems") || parsed.pathname.endsWith("/videos")) return recentActivity(parsed.pathname);
       if (parsed.pathname.endsWith("/search")) {
         const query = parsed.searchParams.get("q");
         if (query !== "Business") return jsonResponse({ items: [] });
@@ -117,6 +139,7 @@ describe("youtube pagination and dedupe", () => {
             country: "FR",
           },
           statistics: { subscriberCount: "1000", hiddenSubscriberCount: false },
+          contentDetails: { relatedPlaylists: { uploads: `UU${id}` } },
         })),
       });
     });
@@ -131,6 +154,7 @@ describe("youtube pagination and dedupe", () => {
   it("stops at the requested creator count even when no email is written", async () => {
     const fetchImpl = vi.fn(async (url: string) => {
       const parsed = new URL(url);
+      if (parsed.pathname.endsWith("/playlistItems") || parsed.pathname.endsWith("/videos")) return recentActivity(parsed.pathname);
       if (parsed.pathname.endsWith("/search")) {
         return jsonResponse({
           items: [
@@ -167,6 +191,7 @@ describe("youtube pagination and dedupe", () => {
   it("searches recent videos first when the audience is small", async () => {
     const fetchImpl = vi.fn(async (url: string) => {
       const parsed = new URL(url);
+      if (parsed.pathname.endsWith("/playlistItems") || parsed.pathname.endsWith("/videos")) return recentActivity(parsed.pathname);
       if (parsed.pathname.endsWith("/search")) {
         if (parsed.searchParams.get("order") !== "date") {
           return jsonResponse({
@@ -188,6 +213,7 @@ describe("youtube pagination and dedupe", () => {
           id: "UCsmall",
           snippet: { title: "Home Cook", description: "Weekly food videos", country: "US" },
           statistics: { subscriberCount: "12000", hiddenSubscriberCount: false },
+          contentDetails: { relatedPlaylists: { uploads: "UUsmall" } },
         }],
       });
     });
@@ -209,6 +235,7 @@ describe("youtube pagination and dedupe", () => {
   it("searches the most viewed videos first when the audience is large", async () => {
     const fetchImpl = vi.fn(async (url: string) => {
       const parsed = new URL(url);
+      if (parsed.pathname.endsWith("/playlistItems") || parsed.pathname.endsWith("/videos")) return recentActivity(parsed.pathname);
       if (parsed.pathname.endsWith("/search")) {
         if (parsed.searchParams.get("order") !== "viewCount") {
           return jsonResponse({
@@ -230,6 +257,7 @@ describe("youtube pagination and dedupe", () => {
           id: "UCbig",
           snippet: { title: "Finance Daily", description: "Daily finance", country: "US" },
           statistics: { subscriberCount: "2000000", hiddenSubscriberCount: false },
+          contentDetails: { relatedPlaylists: { uploads: "UUbig" } },
         }],
       });
     });
@@ -248,6 +276,7 @@ describe("youtube pagination and dedupe", () => {
   it("searches the French alias when the English query finds nobody", async () => {
     const fetchImpl = vi.fn(async (url: string) => {
       const parsed = new URL(url);
+      if (parsed.pathname.endsWith("/playlistItems") || parsed.pathname.endsWith("/videos")) return recentActivity(parsed.pathname);
       if (parsed.pathname.endsWith("/search")) {
         if (parsed.searchParams.get("q") !== "entrepreneuriat") return jsonResponse({ items: [] });
         return jsonResponse({
@@ -259,6 +288,7 @@ describe("youtube pagination and dedupe", () => {
           id: "FRENT",
           snippet: { title: "Atelier", description: "Formation entrepreneuriat", country: "FR" },
           statistics: { subscriberCount: "800", hiddenSubscriberCount: false },
+          contentDetails: { relatedPlaylists: { uploads: "UUFRENT" } },
         }],
       });
     });

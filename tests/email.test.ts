@@ -5,7 +5,7 @@ import { canTransitionEmailStatus, emailStatusLabel, statusAfterSyntaxCheck, sta
 import { chooseOfficialWebsite, classifyUrl, extractUrls } from "@/lib/email/website";
 import { hunterEmailsFromResponse, mapNeverBounceResult, mapZeroBounceStatus, verificationProviderFromEnv } from "@/lib/email/providers";
 import { EmailDiscoveryService } from "@/lib/email/discovery";
-import { channelOriginLabel, emailOriginLabel, pickPrimaryEmail } from "@/lib/creators/email";
+import { channelOriginLabel, emailOriginLabel, pickPrimaryEmail, usablePublicEmails } from "@/lib/creators/email";
 
 describe("email normalization", () => {
   it("normalizes case and mailto query strings", () => {
@@ -27,6 +27,16 @@ describe("email normalization", () => {
       { verificationStatus: "SYNTAX_VALID", confidenceStatus: "MEDIUM", isGenericInbox: false, normalizedEmail: "ada@brand.com" },
     ]);
     expect(primary?.normalizedEmail).toBe("ada@brand.com");
+  });
+
+  it("keeps every needs-review address when none is verified", () => {
+    const ranked = usablePublicEmails([
+      { verificationStatus: "NEEDS_REVIEW", confidenceStatus: "LOW", isGenericInbox: true, normalizedEmail: "info@brand.com" },
+      { verificationStatus: "NEEDS_REVIEW", confidenceStatus: "MEDIUM", isGenericInbox: false, normalizedEmail: "ada@brand.com" },
+      { verificationStatus: "INVALID", confidenceStatus: "LOW", isGenericInbox: false, normalizedEmail: "old@brand.com" },
+    ]);
+    expect(ranked.map((email) => email.normalizedEmail)).toEqual(["ada@brand.com", "info@brand.com"]);
+    expect(pickPrimaryEmail(ranked)?.normalizedEmail).toBe("ada@brand.com");
   });
 
   it("detects the official domain without treating syntax as deliverability", () => {

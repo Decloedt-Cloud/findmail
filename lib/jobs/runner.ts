@@ -5,6 +5,7 @@ import { runMatchIcpChannels } from "@/lib/icp/run";
 import { runDiscoverCreators, runEmailDiscovery } from "@/lib/jobs/discover";
 import { runExport } from "@/lib/jobs/export";
 import { runImport } from "@/lib/jobs/import";
+import { runPruneInactiveChannels } from "@/lib/jobs/prune-inactive";
 import { runVerify } from "@/lib/jobs/verify";
 
 export async function applyRetention() {
@@ -57,6 +58,9 @@ export async function runProcessingJob(processingJobId: string) {
       return;
     case "MATCH_ICP_CHANNELS":
       await runMatchIcpChannels(processingJobId);
+      return;
+    case "PRUNE_INACTIVE_CHANNELS":
+      await runPruneInactiveChannels(processingJobId);
       return;
     default:
       throw new Error(`Unknown job type: ${job.type}`);

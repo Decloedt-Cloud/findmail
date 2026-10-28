@@ -2,8 +2,9 @@ import "@/lib/load-env";
 import { Worker } from "bullmq";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { ensurePruneInactiveJob } from "@/lib/jobs/prune-inactive";
 import { runProcessingJob } from "@/lib/jobs/runner";
-import { QUEUE_NAME } from "@/lib/jobs/queue";
+import { QUEUE_NAME, getQueue } from "@/lib/jobs/queue";
 import { getRedis } from "@/lib/redis";
 
 const connection = getRedis();
@@ -13,13 +14,24 @@ if (!connection) {
 }
 
 const concurrency = Math.max(1, Number(process.env.MAX_CONCURRENT_JOBS || 5));
-const worker = new Worker(QUEUE_NAME, async (job) => runProcessingJob(String(job.data.processingJobId)), {
-  connection,
-  concurrency,
-});
+const worker = new Worker(
+  QUEUE_NAME,
+  async (job) => {
+    if (job.name === "schedule-prune-inactive") {
+      await ensurePruneInactiveJob();
+      return;
+    }
+    await runProcessingJob(String(job.data.processingJobId));
+  },
+  { connection, concurrency },
+);
 
 worker.on("failed", async (job, error) => {
   if (!job) return;
+  if (job.name === "schedule-prune-inactive") {
+    logger.error("inactive channel sweep was not queued", { message: error.message });
+    return;
+  }
   const maxAttempts = job.opts.attempts ?? 1;
   logger.error("job failed", { processingJobId: job.data.processingJobId, attempts: job.attemptsMade, message: error.message });
   if (job.attemptsMade >= maxAttempts) {
@@ -47,5 +59,17 @@ async function shutdown() {
 
 process.on("SIGINT", () => void shutdown());
 process.on("SIGTERM", () => void shutdown());
+
+const queue = getQueue();
+if (queue) {
+  await queue.upsertJobScheduler(
+    "prune-inactive-channels",
+    { pattern: "15 4 * * *" },
+    { name: "schedule-prune-inactive", data: {} },
+  );
+  await ensurePruneInactiveJob().catch((error) => {
+    logger.error("inactive channel sweep was not queued", { message: error instanceof Error ? error.message : "unknown" });
+  });
+}
 
 logger.info("worker started", { concurrency });

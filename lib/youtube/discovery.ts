@@ -11,6 +11,7 @@ import {
 import { audienceSearchPasses } from "@/lib/youtube/audience";
 import { matchTerms, searchQueries } from "@/lib/youtube/terms";
 import { AVERAGE_VIEWS_METHOD, fitViewCount, selectRecentPublicVideos } from "@/lib/youtube/metrics";
+import { qualifiesForStorage } from "@/lib/youtube/qualify";
 import type { EmailCandidate } from "@/lib/email/discovery";
 
 export type DiscoveryQuery = {
@@ -206,6 +207,15 @@ export async function discoverYouTubeChannels(
     channel.relevanceScore = searchRelevance({ ...evidence, hasEmail: channel.descriptionEmails.length > 0 });
     const tier = topicTier(evidence);
     if (tier !== "strong") {
+      filteredOut += 1;
+      return;
+    }
+    if (!qualifiesForStorage({
+      lastActiveAt: channel.lastActiveAt,
+      subscriberCount: channel.subscriberCount,
+      subscriberVisibility: channel.subscriberVisibility,
+      averageViews: channel.averageViews,
+    })) {
       filteredOut += 1;
       return;
     }

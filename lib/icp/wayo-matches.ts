@@ -1,4 +1,4 @@
-import { pickPrimaryEmail } from "@/lib/creators/email";
+import { usablePublicEmails } from "@/lib/creators/email";
 import { prisma } from "@/lib/db";
 
 function snapshotRequestId(snapshot: unknown) {
@@ -78,14 +78,14 @@ export async function listWayoIcpMatches(input: { onboardingId: string; requestI
   });
   const creators = links.flatMap((link) => {
     const creator = link.creator;
-    const email = pickPrimaryEmail(creator.emails);
+    const emails = usablePublicEmails(creator.emails);
     const socials = {
       instagram: creator.instagramUrl,
       twitter: creator.twitterUrl,
       tiktok: creator.tiktokUrl,
       youtube: creator.channelUrl,
     };
-    if (!email && !socials.instagram && !socials.twitter && !socials.tiktok) return [];
+    if (!emails.length && !socials.instagram && !socials.twitter && !socials.tiktok) return [];
     return [
       {
         id: creator.id,
@@ -96,7 +96,8 @@ export async function listWayoIcpMatches(input: { onboardingId: string; requestI
         averageViews: creator.averageViews ?? 0,
         country: creator.country,
         channelIcpName: channelIcpName(creator.channelIcp),
-        email: email?.emailAddress ?? null,
+        email: emails[0]?.emailAddress ?? null,
+        emails: emails.map((item) => item.emailAddress),
         socials,
       },
     ];

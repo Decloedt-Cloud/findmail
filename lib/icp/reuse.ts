@@ -2,6 +2,7 @@ import { prisma } from "@/lib/db";
 import { ICP_COUNTRIES, ICP_MAX_SUBSCRIBERS, ICP_MIN_SUBSCRIBERS } from "@/lib/icp/audience";
 import { readChannelIcp } from "@/lib/icp/channel-icp";
 import { logger } from "@/lib/logger";
+import { activeSince, hasEnoughViews } from "@/lib/youtube/qualify";
 
 const CANDIDATE_LIMIT = 150;
 
@@ -41,6 +42,8 @@ export async function reuseStoredCreators(input: {
       country: { in: ICP_COUNTRIES },
       subscriberVisibility: "PUBLIC",
       subscriberCount: { gte: ICP_MIN_SUBSCRIBERS, lte: ICP_MAX_SUBSCRIBERS },
+      lastActiveAt: { gte: activeSince() },
+      averageViews: { not: null },
       OR: [
         { emails: { some: {} } },
         { instagramUrl: { not: null } },
@@ -56,9 +59,16 @@ export async function reuseStoredCreators(input: {
       description: true,
       keywords: true,
       channelIcp: true,
+      subscriberCount: true,
+      averageViews: true,
     },
   });
-  if (candidates.length === 0) return 0;
+  const eligible = candidates.filter((creator) => hasEnoughViews({
+    subscriberCount: creator.subscriberCount,
+    subscriberVisibility: "PUBLIC",
+    averageViews: creator.averageViews,
+  }));
+  if (eligible.length === 0) return 0;
 
   const apiKey = process.env.DEEPSEEK_API_KEY?.trim();
   if (!apiKey) return 0;
@@ -89,7 +99,7 @@ export async function reuseStoredCreators(input: {
               icp: input.snapshot,
               youtubeSearches: input.searchQueries,
             },
-            channels: candidates.map((creator) => ({
+            channels: eligible.map((creator) => ({
               id: creator.id,
               name: creator.channelName,
               description: creator.description?.slice(0, 350) || null,
@@ -107,7 +117,7 @@ export async function reuseStoredCreators(input: {
     return 0;
   }
   const body = (await response.json().catch(() => ({}))) as { choices?: { message?: { content?: string } }[] };
-  const allowed = new Set(candidates.map((creator) => creator.id));
+  const allowed = new Set(eligible.map((creator) => creator.id));
   const ids = parseCreatorIds(body.choices?.[0]?.message?.content ?? "", allowed, input.limit);
   if (ids.length === 0) return 0;
   await prisma.icpChannelMatch.createMany({

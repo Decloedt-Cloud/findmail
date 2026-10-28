@@ -17,6 +17,7 @@ import { upsertMatchedChannel } from "@/lib/icp/store";
 import { discardCreatorIfUnreachable } from "@/lib/creators/contact";
 import { YouTubeApiError, YouTubeClient, createYouTubeClient, type YouTubeChannel, type YouTubeVideoDetails } from "@/lib/youtube/client";
 import { selectRecentPublicVideos } from "@/lib/youtube/metrics";
+import { qualifiesForStorage } from "@/lib/youtube/qualify";
 
 export async function runMatchIcpChannels(processingJobId: string) {
   const brand = await prisma.brandIcp.findUnique({ where: { processingJobId } });
@@ -165,6 +166,7 @@ async function attachPublicEmails(brandIcpId: string) {
 }
 
 async function findAudienceChannels(queries: string[], target: number) {
+  const poolTarget = target * 3;
   const kept = new Map<string, { channel: YouTubeChannel; publishedAt: Date | null; averageViews: number | null }>();
   let inspected = 0;
   const filtered = {
@@ -198,7 +200,7 @@ async function findAudienceChannels(queries: string[], target: number) {
   );
   let quotaStopped = false;
   for (const { query } of icpSearchPlan(queries)) {
-    if (kept.size >= target) break;
+    if (kept.size >= poolTarget) break;
     let page;
       try {
         page = await searchClient.search({
@@ -278,7 +280,16 @@ async function findAudienceChannels(queries: string[], target: number) {
     const active = activity.lastActiveAt ? new Date(activity.lastActiveAt) : null;
     if (active && !Number.isNaN(active.getTime())) entry.publishedAt = active;
   }
-  return { channels: selected, inspected, quotaStopped };
+  const qualified = selected.filter((entry) => qualifiesForStorage({
+    lastActiveAt: entry.publishedAt,
+    subscriberCount: entry.channel.subscriberCount,
+    subscriberVisibility: entry.channel.subscriberVisibility,
+    averageViews: entry.averageViews,
+  }));
+  if (qualified.length < selected.length) {
+    logger.info("icp channel activity filter", { checked: selected.length, kept: qualified.length });
+  }
+  return { channels: qualified.slice(0, target), inspected, quotaStopped };
 }
 
 async function loadChannels(ids: string[], client: YouTubeClient) {

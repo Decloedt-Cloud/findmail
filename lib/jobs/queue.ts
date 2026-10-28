@@ -37,7 +37,7 @@ export async function enqueueProcessingJob(processingJobId: string) {
     "process",
     { processingJobId },
     {
-      attempts: processingJob?.type === "MATCH_ICP_CHANNELS" ? 1 : 3,
+      attempts: processingJob?.type === "MATCH_ICP_CHANNELS" || processingJob?.type === "PRUNE_INACTIVE_CHANNELS" ? 1 : 3,
       backoff: { type: "exponential", delay: 2000 },
       removeOnComplete: 1000,
       removeOnFail: 500,
