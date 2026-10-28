@@ -5,6 +5,7 @@ const SYSTEM = [
   "You turn a simplified advertiser ICP into YouTube search queries.",
   "Return JSON only: {\"queries\": string[], \"note\": string}.",
   "Write 3 or 4 short search phrases, 2 to 6 words, that would find public videos whose viewers match this ICP.",
+  "Write every search phrase in English, even when the ICP is written in another language.",
   "Search for the educational, professional, or entertainment topics the target people watch, not the advertiser's product.",
   "For a B2B product, target the profession and its day-to-day work, problems, skills, and goals.",
   "The first phrase is special: write only the broad profession or audience topic in 2 or 3 words.",
