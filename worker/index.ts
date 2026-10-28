@@ -60,16 +60,22 @@ async function shutdown() {
 process.on("SIGINT", () => void shutdown());
 process.on("SIGTERM", () => void shutdown());
 
-const queue = getQueue();
-if (queue) {
-  await queue.upsertJobScheduler(
-    "prune-inactive-channels",
-    { pattern: "15 4 * * *" },
-    { name: "schedule-prune-inactive", data: {} },
-  );
-  await ensurePruneInactiveJob().catch((error) => {
-    logger.error("inactive channel sweep was not queued", { message: error instanceof Error ? error.message : "unknown" });
-  });
+async function start() {
+  const queue = getQueue();
+  if (queue) {
+    await queue.upsertJobScheduler(
+      "prune-inactive-channels",
+      { pattern: "15 4 * * *" },
+      { name: "schedule-prune-inactive", data: {} },
+    );
+    await ensurePruneInactiveJob().catch((error) => {
+      logger.error("inactive channel sweep was not queued", { message: error instanceof Error ? error.message : "unknown" });
+    });
+  }
+  logger.info("worker started", { concurrency });
 }
 
-logger.info("worker started", { concurrency });
+void start().catch((error) => {
+  logger.error("worker stopped", { message: error instanceof Error ? error.message : "unknown" });
+  process.exit(1);
+});
