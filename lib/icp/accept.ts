@@ -1,21 +1,12 @@
 import { ICP_AUDIENCE_KEY } from "@/lib/icp/audience";
 import { ApiError } from "@/lib/authz";
 import { prisma } from "@/lib/db";
+import { icpHost, icpIdentityKey } from "@/lib/icp/identity";
 import { enqueueProcessingJob } from "@/lib/jobs/queue";
 import type { wayoAdsIcpSchema } from "@/lib/schemas";
 import type { z } from "zod";
 
 type IcpInput = z.infer<typeof wayoAdsIcpSchema>;
-
-function websiteKey(value: string) {
-  try {
-    const url = new URL(value);
-    const host = url.hostname.replace(/^www\./, "").toLowerCase();
-    return `${host}${url.pathname.replace(/\/+$/, "")}`;
-  } catch {
-    return value.trim().toLowerCase().replace(/\/+$/, "");
-  }
-}
 
 function snapshotRequestId(snapshot: unknown) {
   if (!snapshot || typeof snapshot !== "object") return "";
@@ -83,45 +74,46 @@ async function queueBrand(input: IcpInput, existingId: string | null, snapshot: 
   return { id: brand.id, status: "QUEUED" as const, queued: true as const };
 }
 
-export async function acceptWayoIcp(input: IcpInput) {
-  const maxChannels = input.maxChannels ?? (input.stage === "complex" ? 10 : 30);
-  if (input.stage === "complex" && input.requestId) {
-    const rows = await prisma.brandIcp.findMany({
-      where: { wayoOnboardingId: input.onboardingId },
-      orderBy: { createdAt: "desc" },
-    });
-    const same = rows.find((row) => snapshotRequestId(row.snapshot) === input.requestId) ?? null;
-    if (
-      same &&
-      (same.status === "QUEUED" ||
-        same.status === "RUNNING" ||
-        (same.status === "COMPLETED" && same.matchedChannelCount > 0))
-    ) {
-      return { id: same.id, status: same.status, queued: false as const };
-    }
-    return queueBrand(input, same?.id ?? null, buildSnapshot(input, maxChannels));
-  }
+function isHealthyIcp(row: { status: string; matchedChannelCount: number }) {
+  return row.status === "QUEUED" || row.status === "RUNNING" || (row.status === "COMPLETED" && row.matchedChannelCount > 0);
+}
 
-  const siteKey = websiteKey(input.websiteUrl);
-  let host = "";
-  try {
-    host = new URL(input.websiteUrl).hostname.replace(/^www\./, "");
-  } catch {
-    host = "";
-  }
+async function findBrandCopies(brandName: string, websiteUrl: string) {
+  const host = icpHost(websiteUrl);
+  const key = icpIdentityKey(brandName, websiteUrl);
   const rows = await prisma.brandIcp.findMany({
-    where: host ? { websiteUrl: { contains: host, mode: "insensitive" } } : undefined,
+    where: {
+      brandName: { equals: brandName, mode: "insensitive" },
+      ...(host ? { websiteUrl: { contains: host, mode: "insensitive" } } : {}),
+    },
     orderBy: { createdAt: "desc" },
   });
-  const sameSite = rows.filter(
-    (row) => websiteKey(row.websiteUrl) === siteKey && snapshotRequestId(row.snapshot) === "",
-  );
-  const kept = sameSite.find((row) => row.status === "COMPLETED" && row.matchedChannelCount > 0)
-    ?? sameSite.find((row) => row.status === "QUEUED" || row.status === "RUNNING");
+  return rows.filter((row) => icpIdentityKey(row.brandName, row.websiteUrl) === key);
+}
+
+export async function acceptWayoIcp(input: IcpInput) {
+  const maxChannels = input.maxChannels ?? (input.stage === "complex" ? 10 : 30);
+  const copies = await findBrandCopies(input.brandName, input.websiteUrl);
+
+  if (input.stage === "complex" && input.requestId) {
+    const same = copies.find((row) => snapshotRequestId(row.snapshot) === input.requestId) ?? null;
+    if (same && isHealthyIcp(same)) {
+      return { id: same.id, status: same.status, queued: false as const };
+    }
+    const other = copies.find((row) => row.id !== same?.id && isHealthyIcp(row));
+    if (other) {
+      return { id: other.id, status: other.status, queued: false as const };
+    }
+    return queueBrand(input, same?.id ?? copies[0]?.id ?? null, buildSnapshot(input, maxChannels));
+  }
+
+  const simplified = copies.filter((row) => snapshotRequestId(row.snapshot) === "");
+  const pool = simplified.length > 0 ? simplified : copies;
+  const kept = pool.find((row) => row.status === "COMPLETED" && row.matchedChannelCount > 0)
+    ?? pool.find((row) => row.status === "QUEUED" || row.status === "RUNNING");
   if (kept) {
     return { id: kept.id, status: kept.status, queued: false as const };
   }
-  const existing = sameSite[0] ?? null;
 
-  return queueBrand(input, existing?.id ?? null, buildSnapshot(input, maxChannels));
+  return queueBrand(input, pool[0]?.id ?? null, buildSnapshot(input, maxChannels));
 }
