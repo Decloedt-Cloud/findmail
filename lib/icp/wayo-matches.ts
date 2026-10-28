@@ -15,11 +15,11 @@ function channelIcpName(value: unknown) {
 
 function maxChannels(snapshot: unknown) {
   const raw = snapshot && typeof snapshot === "object" ? Number((snapshot as { maxChannels?: unknown }).maxChannels) : NaN;
-  if (Number.isFinite(raw) && raw >= 1 && raw <= 30) return Math.floor(raw);
+  if (Number.isFinite(raw) && raw >= 1 && raw <= 50) return Math.floor(raw);
   return 10;
 }
 
-export async function listWayoIcpMatches(input: { onboardingId: string; requestId?: string }) {
+export async function listWayoIcpMatches(input: { onboardingId: string; requestId?: string; countries?: string }) {
   const rows = await prisma.brandIcp.findMany({
     where: { wayoOnboardingId: input.onboardingId },
     orderBy: { createdAt: "desc" },
@@ -31,8 +31,17 @@ export async function listWayoIcpMatches(input: { onboardingId: string; requestI
     return { id: null, status: "MISSING" as const, creators: [] };
   }
   const limit = maxChannels(brand.snapshot);
+  const countries = (input.countries || "")
+    .split(",")
+    .map((code) => code.trim().toUpperCase())
+    .filter((code) => /^[A-Z]{2}$/.test(code));
   const links = await prisma.icpChannelMatch.findMany({
-    where: { brandIcpId: brand.id },
+    where: {
+      brandIcpId: brand.id,
+      ...(countries.length
+        ? { OR: countries.map((code) => ({ creator: { country: { equals: code, mode: "insensitive" as const } } })) }
+        : {}),
+    },
     orderBy: { createdAt: "asc" },
     take: limit,
     include: {

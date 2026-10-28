@@ -29,7 +29,7 @@ export const wayoAdsIcpSchema = z.object({
   stage: z.enum(["simplified", "complex"]).optional().default("simplified"),
   requestId: z.string().trim().min(4).max(80).optional(),
   matchingText: z.string().trim().max(4000).optional(),
-  maxChannels: z.number().int().min(1).max(30).optional(),
+  maxChannels: z.number().int().min(1).max(50).optional(),
   request: z
     .object({
       title: icpText.optional(),
@@ -72,6 +72,7 @@ export const wayoAdsIcpSchema = z.object({
 export const wayoAdsIcpMatchQuerySchema = z.object({
   onboardingId: z.string().trim().min(4).max(80),
   requestId: z.string().trim().min(4).max(80).optional(),
+  countries: z.string().trim().max(1200).optional(),
 });
 
 export const wayoAdsCreatorQuerySchema = z.object({

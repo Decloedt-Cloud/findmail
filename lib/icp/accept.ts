@@ -92,7 +92,7 @@ async function findBrandCopies(brandName: string, websiteUrl: string) {
 }
 
 export async function acceptWayoIcp(input: IcpInput) {
-  const maxChannels = input.maxChannels ?? (input.stage === "complex" ? 10 : 30);
+  const maxChannels = input.maxChannels ?? (input.stage === "complex" ? 20 : 50);
   const copies = await findBrandCopies(input.brandName, input.websiteUrl);
 
   if (input.stage === "complex" && input.requestId) {

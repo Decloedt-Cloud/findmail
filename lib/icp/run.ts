@@ -137,11 +137,11 @@ export async function runMatchIcpChannels(processingJobId: string) {
 }
 
 const SEARCH_RESULTS = 50;
-const CHANNEL_TARGET = 30;
+const CHANNEL_TARGET = 50;
 
 function channelTarget(snapshot: unknown) {
   const raw = snapshot && typeof snapshot === "object" ? Number((snapshot as { maxChannels?: unknown }).maxChannels) : NaN;
-  if (Number.isFinite(raw) && raw >= 1 && raw <= 30) return Math.floor(raw);
+  if (Number.isFinite(raw) && raw >= 1 && raw <= 50) return Math.floor(raw);
   return CHANNEL_TARGET;
 }
 
