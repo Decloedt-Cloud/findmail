@@ -1,5 +1,6 @@
 import { usablePublicEmails } from "@/lib/creators/email";
 import { prisma } from "@/lib/db";
+import { ICP_MAX_SUBSCRIBERS, ICP_MIN_SUBSCRIBERS } from "@/lib/icp/audience";
 
 function snapshotRequestId(snapshot: unknown) {
   if (!snapshot || typeof snapshot !== "object") return "";
@@ -38,11 +39,26 @@ export async function listWayoIcpMatches(input: { onboardingId: string; requestI
   const links = await prisma.icpChannelMatch.findMany({
     where: {
       brandIcpId: brand.id,
-    ...(countries.length
-      ? {
-          OR: countries.map((code) => ({ creator: { country: { equals: code, mode: "insensitive" as const } } })),
-        }
-      : {}),
+      creator: {
+        hidden: false,
+        subscriberVisibility: "PUBLIC",
+        subscriberCount: { gte: ICP_MIN_SUBSCRIBERS, lte: ICP_MAX_SUBSCRIBERS },
+        AND: [
+          {
+            OR: [
+              { emails: { some: {} } },
+              { instagramUrl: { not: null } },
+              { twitterUrl: { not: null } },
+              { tiktokUrl: { not: null } },
+            ],
+          },
+          ...(countries.length
+            ? [{
+                OR: countries.map((code) => ({ country: { equals: code, mode: "insensitive" as const } })),
+              }]
+            : []),
+        ],
+      },
     },
     orderBy: { createdAt: "asc" },
     take: limit,

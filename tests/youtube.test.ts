@@ -256,7 +256,7 @@ describe("youtube pagination and dedupe", () => {
         items: [{
           id: "UCbig",
           snippet: { title: "Finance Daily", description: "Daily finance", country: "US" },
-          statistics: { subscriberCount: "2000000", hiddenSubscriberCount: false },
+          statistics: { subscriberCount: "800000", hiddenSubscriberCount: false },
           contentDetails: { relatedPlaylists: { uploads: "UUbig" } },
         }],
       });

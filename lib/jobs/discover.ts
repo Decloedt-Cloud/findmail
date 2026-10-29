@@ -7,6 +7,7 @@ import { EmailDiscoveryService, type EmailCandidate } from "@/lib/email/discover
 import { hunterProviderFromEnv } from "@/lib/email/providers";
 import { saveDiscoveredChannel } from "@/lib/creators/store";
 import { isCancelled, markRunning, recordJobError, refreshJobCounts, updateProgress } from "@/lib/jobs/progress";
+import { MAX_CREATOR_SUBSCRIBERS } from "@/lib/constants";
 import { YouTubeApiError, createYouTubeClient, matchesSearchCountry, matchesSubscriberRange } from "@/lib/youtube/client";
 import type { SocialProfiles } from "@/lib/youtube/contacts";
 import { discoverYouTubeChannels, topicTier, type DiscoveredChannel, type DiscoveryProgress } from "@/lib/youtube/discovery";
@@ -156,7 +157,7 @@ export async function runDiscoverCreators(jobId: string) {
             countries: search.countries,
             language: search.language,
             minSubscribers: search.minSubscribers,
-            maxSubscribers: search.maxSubscribers,
+            maxSubscribers: Math.min(search.maxSubscribers ?? MAX_CREATOR_SUBSCRIBERS, MAX_CREATOR_SUBSCRIBERS),
             maxResults: remaining,
             recencyDays: search.recencyDays,
             excludeChannelIds: reusedIds,
@@ -324,8 +325,8 @@ async function attachReusableCreators(
       keywords: search.keywords,
     });
     if (tier !== "strong") continue;
-    if (!matchesSearchCountry(creator, search.countries)) continue;
-    if (!matchesSubscriberRange(creator.subscriberVisibility, creator.subscriberCount, search.minSubscribers, search.maxSubscribers)) continue;
+    if (!creator.country || !matchesSearchCountry(creator, search.countries)) continue;
+    if (!matchesSubscriberRange(creator.subscriberVisibility, creator.subscriberCount, search.minSubscribers, Math.min(search.maxSubscribers ?? MAX_CREATOR_SUBSCRIBERS, MAX_CREATOR_SUBSCRIBERS))) continue;
     chosen.push(creator);
   }
   for (const creator of chosen) {
