@@ -23,8 +23,9 @@ function buildSnapshot(input: IcpInput, maxChannels: number) {
     offers: input.icp.offers,
     requestId: input.requestId ?? null,
     matchingText: input.matchingText ?? null,
-    request: input.request ?? null,
-    maxChannels,
+  request: input.request ?? null,
+  countries: (input.countries ?? []).map((code) => code.toUpperCase()),
+  maxChannels,
     persistedAt: new Date().toISOString(),
   };
 }
@@ -74,6 +75,19 @@ async function queueBrand(input: IcpInput, existingId: string | null, snapshot: 
   return { id: brand.id, status: "QUEUED" as const, queued: true as const };
 }
 
+function snapshotCountries(snapshot: unknown) {
+  if (!snapshot || typeof snapshot !== "object") return [];
+  const raw = (snapshot as { countries?: unknown }).countries;
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((code) => (typeof code === "string" && /^[A-Za-z]{2}$/.test(code) ? [code.toUpperCase()] : []));
+}
+
+function sameCountryList(stored: string[], requested: string[] | undefined) {
+  const next = [...new Set((requested ?? []).map((code) => code.toUpperCase()))].sort();
+  if (next.length === 0) return true;
+  return [...stored].sort().join(",") === next.join(",");
+}
+
 function isHealthyIcp(row: { status: string; matchedChannelCount: number }) {
   return row.status === "QUEUED" || row.status === "RUNNING" || (row.status === "COMPLETED" && row.matchedChannelCount > 0);
 }
@@ -97,7 +111,7 @@ export async function acceptWayoIcp(input: IcpInput) {
 
   if (input.stage === "complex" && input.requestId) {
     const same = copies.find((row) => snapshotRequestId(row.snapshot) === input.requestId) ?? null;
-    if (same && isHealthyIcp(same)) {
+    if (same && isHealthyIcp(same) && sameCountryList(snapshotCountries(same.snapshot), input.countries)) {
       return { id: same.id, status: same.status, queued: false as const };
     }
     return queueBrand(input, same?.id ?? null, buildSnapshot(input, maxChannels));

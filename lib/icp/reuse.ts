@@ -34,16 +34,22 @@ export async function reuseStoredCreators(input: {
   snapshot: unknown;
   searchQueries: string[];
   limit: number;
+  countries?: string[];
 }) {
   if (input.limit <= 0) return 0;
+  const requested = input.countries?.length ? input.countries : null;
   const candidates = await prisma.creator.findMany({
     where: {
       hidden: false,
-      country: { in: ICP_COUNTRIES },
+      country: { in: requested ?? ICP_COUNTRIES },
       subscriberVisibility: "PUBLIC",
       subscriberCount: { gte: ICP_MIN_SUBSCRIBERS, lte: ICP_MAX_SUBSCRIBERS },
-      lastActiveAt: { gte: activeSince() },
-      averageViews: { not: null },
+      ...(requested
+        ? {}
+        : {
+            lastActiveAt: { gte: activeSince() },
+            averageViews: { not: null },
+          }),
       OR: [
         { emails: { some: {} } },
         { instagramUrl: { not: null } },
@@ -63,11 +69,13 @@ export async function reuseStoredCreators(input: {
       averageViews: true,
     },
   });
-  const eligible = candidates.filter((creator) => hasEnoughViews({
-    subscriberCount: creator.subscriberCount,
-    subscriberVisibility: "PUBLIC",
-    averageViews: creator.averageViews,
-  }));
+  const eligible = requested
+    ? candidates
+    : candidates.filter((creator) => hasEnoughViews({
+        subscriberCount: creator.subscriberCount,
+        subscriberVisibility: "PUBLIC",
+        averageViews: creator.averageViews,
+      }));
   if (eligible.length === 0) return 0;
 
   const apiKey = process.env.DEEPSEEK_API_KEY?.trim();

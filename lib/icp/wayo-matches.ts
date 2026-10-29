@@ -38,9 +38,11 @@ export async function listWayoIcpMatches(input: { onboardingId: string; requestI
   const links = await prisma.icpChannelMatch.findMany({
     where: {
       brandIcpId: brand.id,
-      ...(countries.length
-        ? { OR: countries.map((code) => ({ creator: { country: { equals: code, mode: "insensitive" as const } } })) }
-        : {}),
+    ...(countries.length
+      ? {
+          OR: countries.map((code) => ({ creator: { country: { equals: code, mode: "insensitive" as const } } })),
+        }
+      : {}),
     },
     orderBy: { createdAt: "asc" },
     take: limit,

@@ -5,8 +5,10 @@ import {
   ICP_COUNTRIES,
   ICP_MAX_SUBSCRIBERS,
   ICP_MIN_SUBSCRIBERS,
+  channelInRequestedRegion,
   icpSearchPlan,
   matchesIcpAudience,
+  regionSearchCodes,
 } from "@/lib/icp/audience";
 import { writeChannelIcp } from "@/lib/icp/channel-icp";
 import { discoverPublicEmail } from "@/lib/icp/public-email";
@@ -14,10 +16,8 @@ import { UnrecoverableError } from "bullmq";
 import { searchQueriesForIcp } from "@/lib/icp/deepseek";
 import { reuseStoredCreators } from "@/lib/icp/reuse";
 import { upsertMatchedChannel } from "@/lib/icp/store";
-import { discardCreatorIfUnreachable } from "@/lib/creators/contact";
-import { YouTubeApiError, YouTubeClient, createYouTubeClient, type YouTubeChannel, type YouTubeVideoDetails } from "@/lib/youtube/client";
+import { YouTubeApiError, YouTubeClient, createYouTubeClient, matchesSubscriberRange, type YouTubeChannel, type YouTubeVideoDetails } from "@/lib/youtube/client";
 import { selectRecentPublicVideos } from "@/lib/youtube/metrics";
-import { qualifiesForStorage } from "@/lib/youtube/qualify";
 
 export async function runMatchIcpChannels(processingJobId: string) {
   const brand = await prisma.brandIcp.findUnique({ where: { processingJobId } });
@@ -44,6 +44,7 @@ export async function runMatchIcpChannels(processingJobId: string) {
       data: { searchQueries: analyzed.queries, analysisNote: analyzed.note || null },
     });
 
+    const countries = snapshotCountries(brand.snapshot);
     const target = channelTarget(brand.snapshot);
     const reused = await reuseStoredCreators({
       brandIcpId: brand.id,
@@ -51,16 +52,19 @@ export async function runMatchIcpChannels(processingJobId: string) {
       snapshot: brand.snapshot,
       searchQueries: analyzed.queries,
       limit: target,
+      countries,
     });
     const remaining = Math.max(0, target - reused);
     const found = remaining > 0
-      ? await findAudienceChannels(analyzed.queries, remaining)
+      ? await findAudienceChannels(analyzed.queries, remaining, countries)
       : { channels: [], inspected: 0, quotaStopped: false };
     if (reused === 0 && found.channels.length === 0) {
       throw new UnrecoverableError(
         found.quotaStopped
           ? "The daily YouTube quota was reached before a matching channel was found."
-          : "No public channel in Europe, North America, North Africa, or the Gulf has between 5,000 and 1,000,000 subscribers for this ICP.",
+          : countries.length
+            ? "No public YouTube channel was found in the requested countries for this ICP."
+            : "No public channel in Europe, North America, North Africa, or the Gulf has between 5,000 and 1,000,000 subscribers for this ICP.",
       );
     }
 
@@ -74,15 +78,17 @@ export async function runMatchIcpChannels(processingJobId: string) {
     }
 
     await attachPublicEmails(brand.id);
-    const linked = await prisma.icpChannelMatch.findMany({
-      where: { brandIcpId: brand.id },
-      select: { creatorId: true },
+    await prisma.icpChannelMatch.deleteMany({
+      where: {
+        brandIcpId: brand.id,
+        creator: {
+          emails: { none: {} },
+          instagramUrl: null,
+          twitterUrl: null,
+          tiktokUrl: null,
+        },
+      },
     });
-    for (const link of linked) {
-      const dropped = await discardCreatorIfUnreachable(link.creatorId);
-      if (dropped) logger.info("creator dropped, no email or social", { creatorId: link.creatorId });
-    }
-
     const kept = await prisma.creator.findMany({
       where: { channelIcp: { equals: Prisma.DbNull }, icpChannels: { some: { brandIcpId: brand.id } } },
       select: { id: true, youtubeChannelId: true },
@@ -139,6 +145,15 @@ export async function runMatchIcpChannels(processingJobId: string) {
 const SEARCH_RESULTS = 50;
 const CHANNEL_TARGET = 50;
 
+function snapshotCountries(snapshot: unknown): string[] {
+  const raw = snapshot && typeof snapshot === "object" ? (snapshot as { countries?: unknown }).countries : null;
+  if (!Array.isArray(raw)) return [];
+  return [...new Set(raw.flatMap((code) => {
+    if (typeof code !== "string" || !/^[A-Za-z]{2}$/.test(code.trim())) return [];
+    return [code.trim().toUpperCase()];
+  }))];
+}
+
 function channelTarget(snapshot: unknown) {
   const raw = snapshot && typeof snapshot === "object" ? Number((snapshot as { maxChannels?: unknown }).maxChannels) : NaN;
   if (Number.isFinite(raw) && raw >= 1 && raw <= 50) return Math.floor(raw);
@@ -165,7 +180,21 @@ async function attachPublicEmails(brandIcpId: string) {
   }
 }
 
-async function findAudienceChannels(queries: string[], target: number) {
+function countrySearchPhrases(queries: string[]) {
+  const seen = new Set<string>();
+  const phrases: { query: string }[] = [];
+  for (const query of queries) {
+    const clean = query.replace(/\|/g, " ").replace(/\s+/g, " ").trim().slice(0, 160);
+    const key = clean.toLowerCase();
+    if (!clean || seen.has(key)) continue;
+    seen.add(key);
+    phrases.push({ query: clean });
+    if (phrases.length >= 3) break;
+  }
+  return phrases.length > 0 ? phrases : icpSearchPlan(queries);
+}
+
+async function findAudienceChannels(queries: string[], target: number, countries: string[] = []) {
   const poolTarget = target * 3;
   const kept = new Map<string, { channel: YouTubeChannel; publishedAt: Date | null; averageViews: number | null }>();
   let inspected = 0;
@@ -199,44 +228,67 @@ async function findAudienceChannels(queries: string[], target: number) {
     },
   );
   let quotaStopped = false;
-  for (const { query } of icpSearchPlan(queries)) {
-    if (kept.size >= poolTarget) break;
-    let page;
-      try {
-        page = await searchClient.search({
-          query,
-          type: "channel",
-          order: "relevance",
-          maxResults: SEARCH_RESULTS,
-        });
-      } catch (error) {
-        if (error instanceof YouTubeApiError && error.code === "QUOTA") {
-          quotaStopped = true;
-          break;
+  const singleCountry = countries.length === 1;
+  const regions = countries.length === 0 ? [undefined] : countries.length <= 20 ? countries : regionSearchCodes(countries);
+  const phrases = singleCountry ? countrySearchPhrases(queries) : icpSearchPlan(queries);
+  const maxPages = singleCountry ? 2 : 1;
+  for (const regionCode of regions) {
+    if (kept.size >= poolTarget || quotaStopped) break;
+    for (const { query } of phrases) {
+      if (kept.size >= poolTarget || quotaStopped) break;
+      let pageToken: string | undefined;
+      for (let pageIndex = 0; pageIndex < maxPages && kept.size < poolTarget; pageIndex += 1) {
+        let page;
+        try {
+          page = await searchClient.search({
+            query,
+            type: "channel",
+            order: "relevance",
+            maxResults: SEARCH_RESULTS,
+            regionCode,
+            pageToken,
+          });
+        } catch (error) {
+          if (error instanceof YouTubeApiError && error.code === "QUOTA") {
+            quotaStopped = true;
+            break;
+          }
+          throw error;
         }
-        throw error;
-      }
-      const fresh = [...new Set(page.items.map((item) => item.channelId).filter(Boolean))];
-      inspected += fresh.length;
-      if (fresh.length === 0) continue;
-      const channels = await loadChannels(fresh, searchClient);
-      for (const channel of channels) {
-        if (!matchesIcpAudience(channel)) {
-          if (!channel.country) filtered.missingCountry += 1;
-          else if (!ICP_COUNTRIES.includes(channel.country)) filtered.outsideRegion += 1;
-          else if (channel.subscriberVisibility !== "PUBLIC" || channel.subscriberCount == null) filtered.hiddenSubscribers += 1;
-          else if (channel.subscriberCount < ICP_MIN_SUBSCRIBERS) filtered.belowMinimum += 1;
-          else if (channel.subscriberCount > ICP_MAX_SUBSCRIBERS) filtered.aboveMaximum += 1;
-          continue;
+        pageToken = page.nextPageToken;
+        const fresh = [...new Set(page.items.map((item) => item.channelId).filter(Boolean))];
+        inspected += fresh.length;
+        if (fresh.length > 0) {
+          const channels = await loadChannels(fresh, searchClient);
+          for (const channel of channels) {
+            const inRegion = countries.length
+              ? channelInRequestedRegion(channel.country, countries)
+              : ICP_COUNTRIES.includes((channel.country || "").toUpperCase());
+            const inBand = matchesSubscriberRange(
+              channel.subscriberVisibility,
+              channel.subscriberCount,
+              ICP_MIN_SUBSCRIBERS,
+              ICP_MAX_SUBSCRIBERS,
+            );
+            const strict = countries.length ? inRegion && inBand : matchesIcpAudience(channel);
+            if (strict) kept.set(channel.id, { channel, publishedAt: null, averageViews: null });
+            else if (!channel.country) filtered.missingCountry += 1;
+            else if (!inRegion) filtered.outsideRegion += 1;
+            else if (channel.subscriberVisibility !== "PUBLIC" || channel.subscriberCount == null) filtered.hiddenSubscribers += 1;
+            else if ((channel.subscriberCount ?? 0) < ICP_MIN_SUBSCRIBERS) filtered.belowMinimum += 1;
+            else filtered.aboveMaximum += 1;
+          }
+          logger.info("icp channel filter", {
+            regionCode: regionCode ?? null,
+            searchResults: page.items.length,
+            channelMetadata: channels.length,
+            kept: kept.size,
+            ...filtered,
+          });
         }
-        kept.set(channel.id, { channel, publishedAt: null, averageViews: null });
+        if (!pageToken) break;
       }
-      logger.info("icp channel filter", {
-        searchResults: page.items.length,
-        channelMetadata: channels.length,
-        kept: kept.size,
-        ...filtered,
-      });
+    }
   }
   const selected = [...kept.values()].slice(0, target);
   const uploadIds = new Map<string, string[]>();
@@ -280,16 +332,7 @@ async function findAudienceChannels(queries: string[], target: number) {
     const active = activity.lastActiveAt ? new Date(activity.lastActiveAt) : null;
     if (active && !Number.isNaN(active.getTime())) entry.publishedAt = active;
   }
-  const qualified = selected.filter((entry) => qualifiesForStorage({
-    lastActiveAt: entry.publishedAt,
-    subscriberCount: entry.channel.subscriberCount,
-    subscriberVisibility: entry.channel.subscriberVisibility,
-    averageViews: entry.averageViews,
-  }));
-  if (qualified.length < selected.length) {
-    logger.info("icp channel activity filter", { checked: selected.length, kept: qualified.length });
-  }
-  return { channels: qualified.slice(0, target), inspected, quotaStopped };
+  return { channels: selected.slice(0, target), inspected, quotaStopped };
 }
 
 async function loadChannels(ids: string[], client: YouTubeClient) {

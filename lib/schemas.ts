@@ -30,6 +30,7 @@ export const wayoAdsIcpSchema = z.object({
   requestId: z.string().trim().min(4).max(80).optional(),
   matchingText: z.string().trim().max(4000).optional(),
   maxChannels: z.number().int().min(1).max(50).optional(),
+  countries: z.array(z.string().trim().regex(/^[A-Za-z]{2}$/)).max(60).optional(),
   request: z
     .object({
       title: icpText.optional(),

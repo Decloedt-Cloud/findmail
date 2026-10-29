@@ -38,6 +38,28 @@ export function icpSearchPlan(queries: string[]) {
   return [{ query }];
 }
 
+const REGION_SEARCH_ORDER = ["FR", "DE", "GB", "ES", "IT", "NL", "PL", "BE", "PT", "SE", "US", "CA", "MA", "AE"];
+
+/** A few markets stand in for a continent. YouTube search takes one country at a time. */
+export function regionSearchCodes(countries: string[], limit = 4): string[] {
+  const wanted = new Set(countries.map((code) => code.trim().toUpperCase()).filter((code) => /^[A-Z]{2}$/.test(code)));
+  const preferred = REGION_SEARCH_ORDER.filter((code) => wanted.has(code));
+  const rest = [...wanted].filter((code) => !preferred.includes(code));
+  return [...preferred, ...rest].slice(0, limit);
+}
+
+/** The channel must publish a country, and that country must be one of the requested ones. */
+export function channelInRequestedRegion(
+  country: string | null | undefined,
+  requested: string[],
+): boolean {
+  const wanted = requested.map((code) => code.trim().toUpperCase()).filter(Boolean);
+  if (!wanted.length) return true;
+  const code = (country || "").trim().toUpperCase();
+  if (!code) return false;
+  return wanted.includes(code);
+}
+
 export function matchesIcpAudience(channel: Pick<YouTubeChannel, "country" | "subscriberCount" | "subscriberVisibility">) {
   return (
     matchesDeclaredCountry(channel.country, ICP_COUNTRIES) &&
