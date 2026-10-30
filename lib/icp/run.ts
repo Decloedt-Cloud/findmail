@@ -46,6 +46,10 @@ export async function runMatchIcpChannels(processingJobId: string) {
 
     const countries = snapshotCountries(brand.snapshot);
     const target = channelTarget(brand.snapshot);
+    const requestId = snapshotRequestId(brand.snapshot);
+    const alreadyProposed = requestId
+      ? await creatorsProposedOnOtherRequests(brand.wayoOnboardingId, brand.id, requestId)
+      : { creatorIds: [] as string[], youtubeChannelIds: new Set<string>() };
     const reused = await reuseStoredCreators({
       brandIcpId: brand.id,
       brandName: brand.brandName,
@@ -53,10 +57,11 @@ export async function runMatchIcpChannels(processingJobId: string) {
       searchQueries: analyzed.queries,
       limit: target,
       countries,
+      excludeCreatorIds: alreadyProposed.creatorIds,
     });
     const remaining = Math.max(0, target - reused);
     const found = remaining > 0
-      ? await findAudienceChannels(analyzed.queries, remaining, countries)
+      ? await findAudienceChannels(analyzed.queries, remaining, countries, alreadyProposed.youtubeChannelIds)
       : { channels: [], inspected: 0, quotaStopped: false };
     if (reused === 0 && found.channels.length === 0) {
       throw new UnrecoverableError(
@@ -68,8 +73,10 @@ export async function runMatchIcpChannels(processingJobId: string) {
       );
     }
 
+    const blocked = new Set(alreadyProposed.creatorIds);
     for (const channel of found.channels) {
       const creator = await upsertMatchedChannel(channel.channel, channel.publishedAt, channel.averageViews);
+      if (blocked.has(creator.id)) continue;
       await prisma.icpChannelMatch.upsert({
         where: { brandIcpId_creatorId: { brandIcpId: brand.id, creatorId: creator.id } },
         create: { brandIcpId: brand.id, creatorId: creator.id },
@@ -194,7 +201,40 @@ function countrySearchPhrases(queries: string[]) {
   return phrases.length > 0 ? phrases : icpSearchPlan(queries);
 }
 
-async function findAudienceChannels(queries: string[], target: number, countries: string[] = []) {
+function snapshotRequestId(snapshot: unknown) {
+  if (!snapshot || typeof snapshot !== "object") return "";
+  const id = (snapshot as { requestId?: unknown }).requestId;
+  return typeof id === "string" ? id : "";
+}
+
+/** Creators already proposed for a different request of this onboarding. */
+async function creatorsProposedOnOtherRequests(onboardingId: string, brandIcpId: string, requestId: string) {
+  const rows = await prisma.brandIcp.findMany({
+    where: { wayoOnboardingId: onboardingId, id: { not: brandIcpId } },
+    select: {
+      snapshot: true,
+      channels: { select: { creatorId: true, creator: { select: { youtubeChannelId: true } } } },
+    },
+  });
+  const creatorIds: string[] = [];
+  const youtubeChannelIds = new Set<string>();
+  for (const row of rows) {
+    const other = snapshotRequestId(row.snapshot);
+    if (!other || other === requestId) continue;
+    for (const link of row.channels) {
+      creatorIds.push(link.creatorId);
+      if (link.creator.youtubeChannelId) youtubeChannelIds.add(link.creator.youtubeChannelId);
+    }
+  }
+  return { creatorIds: [...new Set(creatorIds)], youtubeChannelIds };
+}
+
+async function findAudienceChannels(
+  queries: string[],
+  target: number,
+  countries: string[] = [],
+  skipChannelIds: Set<string> = new Set(),
+) {
   const poolTarget = target * 3;
   const kept = new Map<string, { channel: YouTubeChannel; publishedAt: Date | null; averageViews: number | null }>();
   let inspected = 0;
@@ -271,6 +311,7 @@ async function findAudienceChannels(queries: string[], target: number, countries
               ICP_MAX_SUBSCRIBERS,
             );
             const strict = countries.length ? inRegion && inBand : matchesIcpAudience(channel);
+            if (skipChannelIds.has(channel.id)) continue;
             if (strict) kept.set(channel.id, { channel, publishedAt: null, averageViews: null });
             else if (!channel.country) filtered.missingCountry += 1;
             else if (!inRegion) filtered.outsideRegion += 1;

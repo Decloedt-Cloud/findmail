@@ -14,6 +14,23 @@ function channelIcpName(value: unknown) {
   return typeof name === "string" && name.trim() ? name.trim().slice(0, 120) : null;
 }
 
+async function creatorsProposedOnOtherRequests(
+  rows: { id: string; snapshot: unknown }[],
+  brandId: string,
+  requestId: string,
+) {
+  if (!requestId) return new Set<string>();
+  const otherIds = rows
+    .filter((row) => row.id !== brandId && snapshotRequestId(row.snapshot) && snapshotRequestId(row.snapshot) !== requestId)
+    .map((row) => row.id);
+  if (otherIds.length === 0) return new Set<string>();
+  const links = await prisma.icpChannelMatch.findMany({
+    where: { brandIcpId: { in: otherIds } },
+    select: { creatorId: true },
+  });
+  return new Set(links.map((link) => link.creatorId));
+}
+
 function maxChannels(snapshot: unknown) {
   const raw = snapshot && typeof snapshot === "object" ? Number((snapshot as { maxChannels?: unknown }).maxChannels) : NaN;
   if (Number.isFinite(raw) && raw >= 1 && raw <= 50) return Math.floor(raw);
@@ -31,6 +48,7 @@ export async function listWayoIcpMatches(input: { onboardingId: string; requestI
   if (!brand) {
     return { id: null, status: "MISSING" as const, creators: [] };
   }
+  const alreadyProposed = await creatorsProposedOnOtherRequests(rows, brand.id, input.requestId ?? "");
   const limit = maxChannels(brand.snapshot);
   const countries = (input.countries || "")
     .split(",")
@@ -104,6 +122,7 @@ export async function listWayoIcpMatches(input: { onboardingId: string; requestI
     },
   });
   const creators = links.flatMap((link) => {
+    if (alreadyProposed.has(link.creator.id)) return [];
     const creator = link.creator;
     const emails = usablePublicEmails(creator.emails);
     const socials = {
@@ -133,6 +152,7 @@ export async function listWayoIcpMatches(input: { onboardingId: string; requestI
     id: brand.id,
     status: brand.status,
     errorSummary: brand.errorSummary,
+    queries: brand.searchQueries.filter((query) => query.trim()).slice(0, 4),
     creators,
   };
 }

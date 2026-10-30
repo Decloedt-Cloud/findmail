@@ -35,12 +35,16 @@ export async function reuseStoredCreators(input: {
   searchQueries: string[];
   limit: number;
   countries?: string[];
+  /** Channels already proposed for another request of this onboarding. */
+  excludeCreatorIds?: string[];
 }) {
   if (input.limit <= 0) return 0;
   const requested = input.countries?.length ? input.countries : null;
+  const excluded = input.excludeCreatorIds?.filter(Boolean) ?? [];
   const candidates = await prisma.creator.findMany({
     where: {
       hidden: false,
+      ...(excluded.length ? { id: { notIn: excluded } } : {}),
       country: { in: requested ?? ICP_COUNTRIES },
       subscriberVisibility: "PUBLIC",
       subscriberCount: { gte: ICP_MIN_SUBSCRIBERS, lte: ICP_MAX_SUBSCRIBERS },
