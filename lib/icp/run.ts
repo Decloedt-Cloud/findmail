@@ -76,9 +76,15 @@ export async function runMatchIcpChannels(processingJobId: string) {
 
     const blocked = new Set(alreadyProposed.creatorIds);
     const freshCreators = [];
+    const createdCandidateIds: string[] = [];
     for (const channel of found.channels) {
-      const creator = await upsertMatchedChannel(channel.channel, channel.publishedAt, channel.averageViews);
+      const { creator, created } = await upsertMatchedChannel(
+        channel.channel,
+        channel.publishedAt,
+        channel.averageViews,
+      );
       if (blocked.has(creator.id)) continue;
+      if (created) createdCandidateIds.push(creator.id);
       freshCreators.push(creator);
     }
     const selectedFresh = await selectCreatorsForIcp({
@@ -94,11 +100,22 @@ export async function runMatchIcpChannels(processingJobId: string) {
       })),
       limit: remaining,
     });
+    const selectedSet = new Set(selectedFresh);
     for (const creatorId of selectedFresh) {
       await prisma.icpChannelMatch.upsert({
         where: { brandIcpId_creatorId: { brandIcpId: brand.id, creatorId } },
         create: { brandIcpId: brand.id, creatorId },
         update: {},
+      });
+    }
+    const orphanIds = createdCandidateIds.filter((id) => !selectedSet.has(id));
+    if (orphanIds.length > 0) {
+      await prisma.jobItem.updateMany({ where: { creatorId: { in: orphanIds } }, data: { creatorId: null } });
+      await prisma.creator.deleteMany({
+        where: {
+          id: { in: orphanIds },
+          icpChannels: { none: {} },
+        },
       });
     }
 

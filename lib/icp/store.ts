@@ -14,7 +14,11 @@ function viewCount(value: string | null) {
   return value && /^\d+$/.test(value) ? BigInt(value) : null;
 }
 
-export async function upsertMatchedChannel(channel: YouTubeChannel, lastPublishedAt: Date | null, averageViews: number | null = null) {
+export async function upsertMatchedChannel(
+  channel: YouTubeChannel,
+  lastPublishedAt: Date | null,
+  averageViews: number | null = null,
+) {
   const shared = {
     channelName: channel.title || channel.id,
     channelHandle: channel.customUrl,
@@ -28,33 +32,40 @@ export async function upsertMatchedChannel(channel: YouTubeChannel, lastPublishe
     viewCount: viewCount(channel.viewCount),
     thumbnailUrl: channel.thumbnailUrl,
     keywords: channel.keywords,
-    ...(lastPublishedAt ? {
-      recentVideoPublishedAt: lastPublishedAt,
-      lastActiveAt: lastPublishedAt,
-    } : {}),
-    ...(averageViews != null ? {
-      averageViews,
-      averageViewsMethod: AVERAGE_VIEWS_METHOD,
-    } : {}),
+    ...(lastPublishedAt
+      ? {
+          recentVideoPublishedAt: lastPublishedAt,
+          lastActiveAt: lastPublishedAt,
+        }
+      : {}),
+    ...(averageViews != null
+      ? {
+          averageViews,
+          averageViewsMethod: AVERAGE_VIEWS_METHOD,
+        }
+      : {}),
     lastMetadataSyncAt: new Date(),
     discoverySource: "YOUTUBE_SEARCH" as const,
   };
   const existing = await prisma.creator.findUnique({ where: { youtubeChannelId: channel.id } });
   if (existing) {
-    return prisma.creator.update({
+    const creator = await prisma.creator.update({
       where: { id: existing.id },
       data: { ...shared, hidden: false },
     });
+    return { creator, created: false as const };
   }
   try {
-    return await prisma.creator.create({
+    const creator = await prisma.creator.create({
       data: { youtubeChannelId: channel.id, ...shared },
     });
+    return { creator, created: true as const };
   } catch (error) {
     if (!isUniqueViolation(error)) throw error;
-    return prisma.creator.update({
+    const creator = await prisma.creator.update({
       where: { youtubeChannelId: channel.id },
       data: { ...shared, hidden: false },
     });
+    return { creator, created: false as const };
   }
 }
