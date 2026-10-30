@@ -334,9 +334,11 @@ describe("youtube credentials and quota", () => {
     await expect(client.search({ query: "ai", type: "channel", maxResults: 5 })).rejects.toMatchObject({ code: "QUOTA" });
   });
 
-  it("estimates search cost from the pages needed to fill qualified results", () => {
-    expect(estimateSearchQuota({ keywordCount: 1, countryCount: 1, maxResults: 10, includeRecentVideos: false })).toBe(214);
-    expect(estimateSearchQuota({ keywordCount: 1, countryCount: 1, maxResults: 50, includeRecentVideos: false })).toBe(262);
+  it("estimates an upper-bound search cost from the discovery loops", () => {
+    // 1 term × 2 passes × 3 pages × 100 + same channel lists + enrich inspectLimit(10)=50
+    expect(estimateSearchQuota({ keywordCount: 1, countryCount: 1, maxResults: 10, includeRecentVideos: false })).toBe(677);
+    expect(estimateSearchQuota({ keywordCount: 1, countryCount: 1, maxResults: 50, includeRecentVideos: false })).toBe(890);
+    // FR expands "Business" into 4 search terms
     expect(estimateSearchQuota({
       keywordCount: 1,
       countryCount: 1,
@@ -344,7 +346,7 @@ describe("youtube credentials and quota", () => {
       includeRecentVideos: false,
       keywords: ["Business"],
       countries: ["FR"],
-    })).toBe(514);
+    })).toBe(2495);
   });
 
   it("splits filler words and caps stored creators at half the request", () => {

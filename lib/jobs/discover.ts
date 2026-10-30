@@ -107,7 +107,11 @@ export async function runDiscoverCreators(jobId: string) {
         noEmail += 1;
         await prisma.jobItem.update({
           where: { id: item.id },
-          data: { status: "COMPLETED", creatorId: null, result: { dropped: "no-email-or-social" } },
+          data: {
+            status: "COMPLETED",
+            creatorId: null,
+            result: { dropped: "no-usable-contact-or-channel-icp" },
+          },
         });
         return;
       }
@@ -325,7 +329,7 @@ async function attachReusableCreators(
       keywords: search.keywords,
     });
     if (tier !== "strong") continue;
-    if (!creator.country || !matchesSearchCountry(creator, search.countries)) continue;
+    if (!matchesSearchCountry(creator, search.countries)) continue;
     if (!matchesSubscriberRange(creator.subscriberVisibility, creator.subscriberCount, search.minSubscribers, Math.min(search.maxSubscribers ?? MAX_CREATOR_SUBSCRIBERS, MAX_CREATOR_SUBSCRIBERS))) continue;
     chosen.push(creator);
   }

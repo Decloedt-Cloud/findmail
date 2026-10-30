@@ -15,6 +15,7 @@ import { discoverPublicEmail } from "@/lib/icp/public-email";
 import { UnrecoverableError } from "bullmq";
 import { searchQueriesForIcp } from "@/lib/icp/deepseek";
 import { reuseStoredCreators } from "@/lib/icp/reuse";
+import { selectCreatorsForIcp } from "@/lib/icp/select-creators";
 import { upsertMatchedChannel } from "@/lib/icp/store";
 import { YouTubeApiError, YouTubeClient, createYouTubeClient, matchesSubscriberRange, type YouTubeChannel, type YouTubeVideoDetails } from "@/lib/youtube/client";
 import { selectRecentPublicVideos } from "@/lib/youtube/metrics";
@@ -74,45 +75,45 @@ export async function runMatchIcpChannels(processingJobId: string) {
     }
 
     const blocked = new Set(alreadyProposed.creatorIds);
+    const freshCreators = [];
     for (const channel of found.channels) {
       const creator = await upsertMatchedChannel(channel.channel, channel.publishedAt, channel.averageViews);
       if (blocked.has(creator.id)) continue;
+      freshCreators.push(creator);
+    }
+    const selectedFresh = await selectCreatorsForIcp({
+      brandName: brand.brandName,
+      snapshot: brand.snapshot,
+      searchQueries: analyzed.queries,
+      candidates: freshCreators.map((creator) => ({
+        id: creator.id,
+        channelName: creator.channelName,
+        description: creator.description,
+        keywords: creator.keywords,
+        channelIcp: creator.channelIcp,
+      })),
+      limit: remaining,
+    });
+    for (const creatorId of selectedFresh) {
       await prisma.icpChannelMatch.upsert({
-        where: { brandIcpId_creatorId: { brandIcpId: brand.id, creatorId: creator.id } },
-        create: { brandIcpId: brand.id, creatorId: creator.id },
+        where: { brandIcpId_creatorId: { brandIcpId: brand.id, creatorId } },
+        create: { brandIcpId: brand.id, creatorId },
         update: {},
       });
     }
 
     await attachPublicEmails(brand.id);
-    await prisma.icpChannelMatch.deleteMany({
-      where: {
-        brandIcpId: brand.id,
-        creator: {
-          emails: { none: {} },
-          instagramUrl: null,
-          twitterUrl: null,
-          tiktokUrl: null,
-        },
-      },
-    });
-    const kept = await prisma.creator.findMany({
-      where: { channelIcp: { equals: Prisma.DbNull }, icpChannels: { some: { brandIcpId: brand.id } } },
-      select: { id: true, youtubeChannelId: true },
-    });
-    const byYoutube = new Map(found.channels.map((row) => [row.channel.id, row.channel]));
-    for (const creator of kept) {
-      const channel = byYoutube.get(creator.youtubeChannelId);
-      if (!channel) continue;
-      try {
-        const profile = await writeChannelIcp(channel);
-        await prisma.creator.update({ where: { id: creator.id }, data: { channelIcp: profile } });
-      } catch (error) {
-        logger.error("channel icp failed", { creatorId: creator.id, message: error instanceof Error ? error.message : "unknown" });
-      }
-    }
+    await writeMissingChannelIcps(brand.id, found.channels.map((row) => row.channel));
+    await pruneUnusableMatches(brand.id);
 
     const channelCount = await prisma.icpChannelMatch.count({ where: { brandIcpId: brand.id } });
+    if (channelCount === 0) {
+      throw new UnrecoverableError(
+        countries.length
+          ? "No relevant public channel with contact details was found in the requested countries for this ICP."
+          : "No relevant public channel with contact details was found for this ICP.",
+      );
+    }
     await prisma.brandIcp.update({
       where: { id: brand.id },
       data: {
@@ -185,6 +186,77 @@ async function attachPublicEmails(brandIcpId: string) {
       });
     }
   }
+}
+
+async function writeMissingChannelIcps(brandIcpId: string, youtubeChannels: YouTubeChannel[]) {
+  const byYoutube = new Map(youtubeChannels.map((channel) => [channel.id, channel]));
+  const missing = await prisma.creator.findMany({
+    where: {
+      channelIcp: { equals: Prisma.DbNull },
+      icpChannels: { some: { brandIcpId } },
+    },
+    select: {
+      id: true,
+      youtubeChannelId: true,
+      channelName: true,
+      description: true,
+      keywords: true,
+      country: true,
+    },
+  });
+  for (const creator of missing) {
+    const youtube = byYoutube.get(creator.youtubeChannelId);
+    const source = youtube
+      ? {
+          id: youtube.id,
+          title: youtube.title,
+          description: youtube.description,
+          keywords: youtube.keywords,
+          country: youtube.country,
+        }
+      : {
+          id: creator.youtubeChannelId,
+          title: creator.channelName,
+          description: creator.description || "",
+          keywords: creator.keywords,
+          country: creator.country,
+        };
+    try {
+      const profile = await writeChannelIcp(source);
+      await prisma.creator.update({ where: { id: creator.id }, data: { channelIcp: profile } });
+    } catch (error) {
+      logger.error("channel icp failed", {
+        creatorId: creator.id,
+        message: error instanceof Error ? error.message : "unknown",
+      });
+    }
+  }
+}
+
+/** Drop matches Wayo cannot propose: no usable contact, or no channel ICP. */
+async function pruneUnusableMatches(brandIcpId: string) {
+  await prisma.icpChannelMatch.deleteMany({
+    where: {
+      brandIcpId,
+      OR: [
+        { creator: { channelIcp: { equals: Prisma.DbNull } } },
+        {
+          creator: {
+            AND: [
+              { OR: [{ instagramUrl: null }, { instagramUrl: "" }] },
+              { OR: [{ twitterUrl: null }, { twitterUrl: "" }] },
+              { OR: [{ tiktokUrl: null }, { tiktokUrl: "" }] },
+              {
+                emails: {
+                  none: { verificationStatus: { notIn: ["INVALID", "NOT_FOUND"] } },
+                },
+              },
+            ],
+          },
+        },
+      ],
+    },
+  });
 }
 
 function countrySearchPhrases(queries: string[]) {

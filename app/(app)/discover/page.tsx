@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { ChevronDown, Search } from "lucide-react";
 import { toast } from "sonner";
 import { MAX_CREATOR_SUBSCRIBERS, MIN_CREATOR_SUBSCRIBERS } from "@/lib/constants";
@@ -23,11 +23,8 @@ export default function DiscoverPage() {
   const [maxResults, setMaxResults] = useState(10);
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [country, setCountry] = useState("FR");
-  const [countryQuery, setCountryQuery] = useState("");
   const [minSubscribers, setMinSubscribers] = useState(String(MIN_CREATOR_SUBSCRIBERS));
   const [maxSubscribers, setMaxSubscribers] = useState(String(MAX_CREATOR_SUBSCRIBERS));
-  const [recencyDays, setRecencyDays] = useState("");
-  const [requireEmail, setRequireEmail] = useState(false);
   const [jobs, setJobs] = useState<SearchJob[]>([]);
   const [quota, setQuota] = useState<{ used: number; daily: number } | null>(null);
   const [youtube, setYoutube] = useState<boolean | null>(null);
@@ -123,17 +120,7 @@ export default function DiscoverPage() {
   }, [activeJobId, resultSort]);
 
   const niche = DISCOVERY_NICHES.find((item) => item.id === nicheId) ?? null;
-  const visibleCountries = useMemo(() => {
-    const query = countryQuery.trim().toLowerCase();
-    const matches = query
-      ? DISCOVERY_COUNTRIES.filter((item) => `${item.name} ${item.code}`.toLowerCase().includes(query))
-      : DISCOVERY_COUNTRIES;
-    const selected = DISCOVERY_COUNTRIES.find((item) => item.code === country);
-    if (selected && !matches.some((item) => item.code === country)) return [selected, ...matches];
-    return matches;
-  }, [country, countryQuery]);
   const keywordCount = niche ? 1 : 0;
-  const countryCount = country ? 1 : 0;
   const minSubscriberCount = Math.max(MIN_CREATOR_SUBSCRIBERS, Number(minSubscribers) || MIN_CREATOR_SUBSCRIBERS);
   const maxSubscriberCount = Math.min(MAX_CREATOR_SUBSCRIBERS, Math.max(MIN_CREATOR_SUBSCRIBERS, Number(maxSubscribers) || MAX_CREATOR_SUBSCRIBERS));
   const selectedAudience = DISCOVERY_AUDIENCES.find((item) => item.min === minSubscriberCount && item.max === (maxSubscriberCount ?? null))?.id ?? null;
@@ -145,8 +132,8 @@ export default function DiscoverPage() {
   }[audienceFocus(minSubscriberCount, maxSubscriberCount)];
   const quotaInput = {
     keywordCount,
-    countryCount,
-    includeRecentVideos: Boolean(recencyDays),
+    countryCount: country ? 1 : 0,
+    includeRecentVideos: false,
     keywords: niche ? [niche.query] : [],
     countries: country ? [country] : [],
     minSubscribers: minSubscriberCount,
@@ -177,11 +164,9 @@ export default function DiscoverPage() {
           minSubscribers: minSubscriberCount,
           maxSubscribers: maxSubscriberCount,
           maxResults,
-          requirePublicEmail: requireEmail,
-          recencyDays: recencyDays ? Number(recencyDays) : undefined,
         }),
       });
-      toast.success(`Search queued. Estimated quota: ${formatNumber(result.estimatedQuota)} units.`);
+      toast.success(`Search queued. Up to about ${formatNumber(result.estimatedQuota)} API units.`);
       setLive(null);
       setResults([]);
       setResultTotal(0);
@@ -287,15 +272,13 @@ export default function DiscoverPage() {
 
           <div>
             <p className="text-xs font-semibold tracking-wide text-muted-foreground">COUNTRY</p>
-            <Input
+            <Select
               className="mt-2 h-12 rounded-2xl"
-              value={countryQuery}
-              onChange={(event) => setCountryQuery(event.target.value)}
-              placeholder="Search a country"
-              aria-label="Search a country"
-            />
-            <Select className="mt-2 h-12 rounded-2xl" value={country} onChange={(event) => setCountry(event.target.value)} aria-label="Country">
-              {visibleCountries.map((item) => (
+              value={country}
+              onChange={(event) => setCountry(event.target.value)}
+              aria-label="Country"
+            >
+              {DISCOVERY_COUNTRIES.map((item) => (
                 <option key={item.code} value={item.code}>{item.name}</option>
               ))}
             </Select>
@@ -366,11 +349,6 @@ export default function DiscoverPage() {
                     else if (value < MIN_CREATOR_SUBSCRIBERS) setMaxSubscribers(String(MIN_CREATOR_SUBSCRIBERS));
                   }}
                 />
-                <Input type="number" min={1} placeholder="Active within days" aria-label="Recent video within days" value={recencyDays} onChange={(event) => setRecencyDays(event.target.value)} />
-                <label className="flex items-start gap-2 text-sm">
-                  <input type="checkbox" className="mt-1 h-4 w-4" checked={requireEmail} onChange={(event) => setRequireEmail(event.target.checked)} />
-                  Also open the public website when a link is written in the description
-                </label>
               </div>
             ) : null}
           </div>
@@ -386,7 +364,7 @@ export default function DiscoverPage() {
                     key={count}
                     type="button"
                     disabled={tooCostly}
-                    title={tooCostly ? `Needs about ${formatNumber(cost)} units` : `About ${formatNumber(cost)} units`}
+                    title={`Up to about ${formatNumber(cost)} units`}
                     className={`h-12 rounded-full text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${maxResults === count ? "bg-primary text-primary-foreground" : "border bg-card"}`}
                     onClick={() => setMaxResults(count)}
                   >
@@ -395,18 +373,22 @@ export default function DiscoverPage() {
                 );
               })}
             </div>
-            <p className="mt-2 text-sm text-muted-foreground">Creators are shown even when no public email is found.</p>
+            <p className="mt-2 text-sm text-muted-foreground">Only creators with a usable public email or a social profile are kept.</p>
           </div>
 
           <p className="rounded-2xl border bg-muted/40 px-4 py-3 text-sm">
             {niche
-              ? `This search uses about ${formatNumber(estimatedQuota)} YouTube API units.`
-              : "Choose a category to see how many YouTube API units this search uses."}
+              ? `This search uses up to about ${formatNumber(estimatedQuota)} YouTube API units.`
+              : "Choose a category to see how many YouTube API units this search may use."}
           </p>
           <Button type="submit" className="h-12 w-full rounded-full text-base" disabled={pending || youtube === false || overQuota}>
             {pending ? "Finding..." : "Find Creators"}
           </Button>
-          {overQuota ? <p className="text-sm text-muted-foreground">{formatNumber(quotaLeft)} units left today. This search needs about {formatNumber(estimatedQuota)}.</p> : null}
+          {overQuota ? (
+            <p className="text-sm text-muted-foreground">
+              {formatNumber(quotaLeft)} units left today. This search may need up to about {formatNumber(estimatedQuota)}.
+            </p>
+          ) : null}
         </form>
       </section>
 
