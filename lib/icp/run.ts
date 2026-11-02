@@ -65,13 +65,20 @@ export async function runMatchIcpChannels(processingJobId: string) {
       ? await findAudienceChannels(analyzed.queries, remaining, countries, alreadyProposed.youtubeChannelIds)
       : { channels: [], inspected: 0, quotaStopped: false };
     if (reused === 0 && found.channels.length === 0) {
-      throw new UnrecoverableError(
-        found.quotaStopped
-          ? "The daily YouTube quota was reached before a matching channel was found."
-          : countries.length
-            ? "No public YouTube channel was found in the requested countries for this ICP."
-            : "No public channel in Europe, North America, North Africa, or the Gulf has between 5,000 and 1,000,000 subscribers for this ICP.",
-      );
+      if (found.quotaStopped) {
+        throw new UnrecoverableError(
+          "The daily YouTube quota was reached before a matching channel was found.",
+        );
+      }
+      await completeMatchWithNoChannels({
+        brandId: brand.id,
+        processingJobId,
+        inspected: found.inspected,
+        note: countries.length
+          ? "No public YouTube channel was found in the requested countries for this ICP."
+          : "No public channel in Europe, North America, North Africa, or the Gulf has between 5,000 and 1,000,000 subscribers for this ICP.",
+      });
+      return;
     }
 
     const blocked = new Set(alreadyProposed.creatorIds);
@@ -125,11 +132,15 @@ export async function runMatchIcpChannels(processingJobId: string) {
 
     const channelCount = await prisma.icpChannelMatch.count({ where: { brandIcpId: brand.id } });
     if (channelCount === 0) {
-      throw new UnrecoverableError(
-        countries.length
+      await completeMatchWithNoChannels({
+        brandId: brand.id,
+        processingJobId,
+        inspected: reused + found.inspected,
+        note: countries.length
           ? "No relevant public channel with contact details was found in the requested countries for this ICP."
           : "No relevant public channel with contact details was found for this ICP.",
-      );
+      });
+      return;
     }
     await prisma.brandIcp.update({
       where: { id: brand.id },
@@ -183,6 +194,35 @@ function channelTarget(snapshot: unknown) {
   const raw = snapshot && typeof snapshot === "object" ? Number((snapshot as { maxChannels?: unknown }).maxChannels) : NaN;
   if (Number.isFinite(raw) && raw >= 1 && raw <= 50) return Math.floor(raw);
   return CHANNEL_TARGET;
+}
+
+/** Empty match is a finished search, not a failed job. Wayo can re-queue later. */
+async function completeMatchWithNoChannels(input: {
+  brandId: string;
+  processingJobId: string;
+  inspected: number;
+  note: string;
+}) {
+  await prisma.brandIcp.update({
+    where: { id: input.brandId },
+    data: {
+      status: "COMPLETED",
+      matchedChannelCount: 0,
+      errorSummary: input.note.slice(0, 800),
+    },
+  });
+  await prisma.processingJob.update({
+    where: { id: input.processingJobId },
+    data: {
+      status: "COMPLETED",
+      progress: 100,
+      totalRecords: input.inspected,
+      processedRecords: input.inspected,
+      successCount: 0,
+      errorSummary: input.note.slice(0, 800),
+      completedAt: new Date(),
+    },
+  });
 }
 
 async function attachPublicEmails(brandIcpId: string) {
