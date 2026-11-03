@@ -17,9 +17,9 @@ const GULF = ["AE", "SA", "QA", "KW", "BH", "OM"];
 
 export const ICP_COUNTRIES = [...EUROPE, ...NORTH_AMERICA, ...NORTH_AFRICA, ...GULF];
 
-export const ICP_AUDIENCE_KEY = "5k-1m:global-search-reuse:v3";
+export const ICP_AUDIENCE_KEY = "5k-1m:global-search-reuse:v4";
 
-/** Build a valid YouTube query; the search plan deliberately passes only its broadest phrase. */
+/** Build a valid YouTube query from one or more phrases (pipe-joined when several). */
 export function icpSearchQuery(queries: string[]) {
   const parts: string[] = [];
   for (const query of queries) {
@@ -32,10 +32,19 @@ export function icpSearchQuery(queries: string[]) {
   return parts.join(" | ");
 }
 
+/** Up to 3 distinct phrases × 1 page each (~300 search units before enrichment). */
 export function icpSearchPlan(queries: string[]) {
-  const query = icpSearchQuery(queries.slice(0, 1));
-  if (!query) return [];
-  return [{ query }];
+  const seen = new Set<string>();
+  const phrases: { query: string }[] = [];
+  for (const query of queries) {
+    const clean = query.replace(/\|/g, " ").replace(/\s+/g, " ").trim().slice(0, 160);
+    const key = clean.toLowerCase();
+    if (!clean || seen.has(key)) continue;
+    seen.add(key);
+    phrases.push({ query: clean });
+    if (phrases.length >= 3) break;
+  }
+  return phrases;
 }
 
 const REGION_SEARCH_ORDER = ["FR", "DE", "GB", "ES", "IT", "NL", "PL", "BE", "PT", "SE", "US", "CA", "MA", "AE"];

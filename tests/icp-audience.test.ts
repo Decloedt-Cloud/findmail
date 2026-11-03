@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { icpSearchPlan, icpSearchQuery, channelInRequestedRegion, regionSearchCodes, matchesIcpAudience } from "@/lib/icp/audience";
+import { icpSearchPlan, channelInRequestedRegion, regionSearchCodes, matchesIcpAudience } from "@/lib/icp/audience";
 
 const channel = (country: string | null, subscriberCount: number | null, subscriberVisibility: "PUBLIC" | "HIDDEN" | "UNAVAILABLE" = "PUBLIC") => ({
   country,
@@ -8,12 +8,22 @@ const channel = (country: string | null, subscriberCount: number | null, subscri
 });
 
 describe("icpSearchPlan", () => {
-  it("uses only the broad audience phrase for the global search", () => {
-    const phrases = ["logiciel veterinaire", "gestion clinique", "veterinary software"];
+  it("runs up to three distinct phrases for the global search", () => {
+    const phrases = ["veterinary medicine", "clinic workflow", "veterinary software", "extra phrase"];
     const plan = icpSearchPlan(phrases);
-    expect(plan).toHaveLength(1);
-    expect(plan[0]?.query).toBe(icpSearchQuery(phrases.slice(0, 1)));
-    expect(plan[0]?.query).toBe("logiciel veterinaire");
+    expect(plan).toHaveLength(3);
+    expect(plan.map((item) => item.query)).toEqual([
+      "veterinary medicine",
+      "clinic workflow",
+      "veterinary software",
+    ]);
+  });
+
+  it("dedupes phrases case-insensitively", () => {
+    const plan = icpSearchPlan(["Veterinary Medicine", "veterinary medicine", "clinic workflow"]);
+    expect(plan).toHaveLength(2);
+    expect(plan[0]?.query).toBe("Veterinary Medicine");
+    expect(plan[1]?.query).toBe("clinic workflow");
   });
 });
 

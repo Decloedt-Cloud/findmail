@@ -401,20 +401,6 @@ async function pruneUnusableMatches(brandIcpId: string) {
   }
 }
 
-function countrySearchPhrases(queries: string[]) {
-  const seen = new Set<string>();
-  const phrases: { query: string }[] = [];
-  for (const query of queries) {
-    const clean = query.replace(/\|/g, " ").replace(/\s+/g, " ").trim().slice(0, 160);
-    const key = clean.toLowerCase();
-    if (!clean || seen.has(key)) continue;
-    seen.add(key);
-    phrases.push({ query: clean });
-    if (phrases.length >= 3) break;
-  }
-  return phrases.length > 0 ? phrases : icpSearchPlan(queries);
-}
-
 function snapshotRequestId(snapshot: unknown) {
   if (!snapshot || typeof snapshot !== "object") return "";
   const id = (snapshot as { requestId?: unknown }).requestId;
@@ -484,7 +470,7 @@ async function findAudienceChannels(
   let quotaStopped = false;
   const singleCountry = countries.length === 1;
   const regions = countries.length === 0 ? [undefined] : countries.length <= 20 ? countries : regionSearchCodes(countries);
-  const phrases = singleCountry ? countrySearchPhrases(queries) : icpSearchPlan(queries);
+  const phrases = icpSearchPlan(queries);
   const maxPages = singleCountry ? 2 : 1;
   for (const regionCode of regions) {
     if (kept.size >= poolTarget || quotaStopped) break;
