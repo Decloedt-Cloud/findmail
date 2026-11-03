@@ -85,7 +85,7 @@ export async function listWayoIcpMatches(input: { onboardingId: string; requestI
       tiktok: creator.tiktokUrl,
       youtube: creator.channelUrl,
     };
-    if (!email && !socials.instagram && !socials.twitter && !socials.tiktok) return [];
+    if (!email && !socials.instagram && !socials.twitter && !socials.tiktok && !socials.youtube) return [];
     return [
       {
         id: creator.id,
