@@ -1,5 +1,7 @@
-import { pickPrimaryEmail } from "@/lib/creators/email";
+import { USABLE_CONTACT, hasPublicContact } from "@/lib/creators/contact";
+import { usablePublicEmails } from "@/lib/creators/email";
 import { prisma } from "@/lib/db";
+import { ICP_MAX_SUBSCRIBERS, ICP_MIN_SUBSCRIBERS } from "@/lib/icp/audience";
 
 function snapshotRequestId(snapshot: unknown) {
   if (!snapshot || typeof snapshot !== "object") return "";
@@ -13,13 +15,30 @@ function channelIcpName(value: unknown) {
   return typeof name === "string" && name.trim() ? name.trim().slice(0, 120) : null;
 }
 
+async function creatorsProposedOnOtherRequests(
+  rows: { id: string; snapshot: unknown }[],
+  brandId: string,
+  requestId: string,
+) {
+  if (!requestId) return new Set<string>();
+  const otherIds = rows
+    .filter((row) => row.id !== brandId && snapshotRequestId(row.snapshot) && snapshotRequestId(row.snapshot) !== requestId)
+    .map((row) => row.id);
+  if (otherIds.length === 0) return new Set<string>();
+  const links = await prisma.icpChannelMatch.findMany({
+    where: { brandIcpId: { in: otherIds } },
+    select: { creatorId: true },
+  });
+  return new Set(links.map((link) => link.creatorId));
+}
+
 function maxChannels(snapshot: unknown) {
   const raw = snapshot && typeof snapshot === "object" ? Number((snapshot as { maxChannels?: unknown }).maxChannels) : NaN;
-  if (Number.isFinite(raw) && raw >= 1 && raw <= 30) return Math.floor(raw);
+  if (Number.isFinite(raw) && raw >= 1 && raw <= 50) return Math.floor(raw);
   return 10;
 }
 
-export async function listWayoIcpMatches(input: { onboardingId: string; requestId?: string }) {
+export async function listWayoIcpMatches(input: { onboardingId: string; requestId?: string; countries?: string }) {
   const rows = await prisma.brandIcp.findMany({
     where: { wayoOnboardingId: input.onboardingId },
     orderBy: { createdAt: "desc" },
@@ -30,9 +49,29 @@ export async function listWayoIcpMatches(input: { onboardingId: string; requestI
   if (!brand) {
     return { id: null, status: "MISSING" as const, creators: [] };
   }
+  const alreadyProposed = await creatorsProposedOnOtherRequests(rows, brand.id, input.requestId ?? "");
   const limit = maxChannels(brand.snapshot);
+  const countries = (input.countries || "")
+    .split(",")
+    .map((code) => code.trim().toUpperCase())
+    .filter((code) => /^[A-Z]{2}$/.test(code));
   const links = await prisma.icpChannelMatch.findMany({
-    where: { brandIcpId: brand.id },
+    where: {
+      brandIcpId: brand.id,
+      creator: {
+        hidden: false,
+        subscriberVisibility: "PUBLIC",
+        subscriberCount: { gte: ICP_MIN_SUBSCRIBERS, lte: ICP_MAX_SUBSCRIBERS },
+        AND: [
+          USABLE_CONTACT,
+          ...(countries.length
+            ? [{
+                OR: countries.map((code) => ({ country: { equals: code, mode: "insensitive" as const } })),
+              }]
+            : []),
+        ],
+      },
+    },
     orderBy: { createdAt: "asc" },
     take: limit,
     include: {
@@ -77,15 +116,26 @@ export async function listWayoIcpMatches(input: { onboardingId: string; requestI
     },
   });
   const creators = links.flatMap((link) => {
+    if (alreadyProposed.has(link.creator.id)) return [];
     const creator = link.creator;
-    const email = pickPrimaryEmail(creator.emails);
+    const emails = usablePublicEmails(creator.emails);
     const socials = {
-      instagram: creator.instagramUrl,
-      twitter: creator.twitterUrl,
-      tiktok: creator.tiktokUrl,
+      instagram: creator.instagramUrl?.trim() || null,
+      twitter: creator.twitterUrl?.trim() || null,
+      tiktok: creator.tiktokUrl?.trim() || null,
       youtube: creator.channelUrl,
     };
-    if (!email && !socials.instagram && !socials.twitter && !socials.tiktok && !socials.youtube) return [];
+if (
+  !hasPublicContact({
+    emailCount: emails.length,
+    instagramUrl: socials.instagram,
+    twitterUrl: socials.twitter,
+    tiktokUrl: socials.tiktok,
+  }) &&
+  !socials.youtube
+) {
+  return [];
+}
     return [
       {
         id: creator.id,
@@ -96,7 +146,8 @@ export async function listWayoIcpMatches(input: { onboardingId: string; requestI
         averageViews: creator.averageViews ?? 0,
         country: creator.country,
         channelIcpName: channelIcpName(creator.channelIcp),
-        email: email?.emailAddress ?? null,
+        email: emails[0]?.emailAddress ?? null,
+        emails: emails.map((item) => item.emailAddress),
         socials,
       },
     ];
@@ -105,6 +156,7 @@ export async function listWayoIcpMatches(input: { onboardingId: string; requestI
     id: brand.id,
     status: brand.status,
     errorSummary: brand.errorSummary,
+    queries: brand.searchQueries.filter((query) => query.trim()).slice(0, 4),
     creators,
   };
 }

@@ -23,6 +23,68 @@ import { EmptyState, Skeleton } from "@/components/ui/feedback";
 
 const columnHelper = legacyCreateColumnHelper<CreatorRow>();
 
+type SocialKind = "instagram" | "x" | "tiktok";
+
+function socialLinks(creator: CreatorRow) {
+  return [
+    creator.instagramUrl?.trim() ? { kind: "instagram" as const, label: "Instagram", href: creator.instagramUrl.trim() } : null,
+    creator.twitterUrl?.trim() ? { kind: "x" as const, label: "X", href: creator.twitterUrl.trim() } : null,
+    creator.tiktokUrl?.trim() ? { kind: "tiktok" as const, label: "TikTok", href: creator.tiktokUrl.trim() } : null,
+  ].filter((item): item is { kind: SocialKind; label: string; href: string } => Boolean(item));
+}
+
+function SocialIcon({ kind }: { kind: SocialKind }) {
+  const common = { viewBox: "0 0 24 24", className: "h-4 w-4", "aria-hidden": true as const };
+  if (kind === "instagram") {
+    return (
+      <svg {...common} fill="none" stroke="currentColor" strokeWidth="1.8">
+        <rect x="3.5" y="3.5" width="17" height="17" rx="5" />
+        <circle cx="12" cy="12" r="4" />
+        <circle cx="17.4" cy="6.6" r="1" fill="currentColor" stroke="none" />
+      </svg>
+    );
+  }
+  if (kind === "x") {
+    return (
+      <svg {...common} fill="currentColor">
+        <path d="M4 4h3.6l4.2 5.7L16.8 4H20l-6.1 7.2L20.5 20h-3.6l-4.5-6.1L7.2 20H4l6.4-7.6L4 4z" />
+      </svg>
+    );
+  }
+  return (
+    <svg {...common} fill="currentColor">
+      <path d="M14.2 3h2.6c.1 2.2 1.2 3.9 3.2 5v2.5c-1.1 0-2.2-.3-3.2-.9v5.7c0 3.4-2.7 6.2-6.1 6.2S4.6 18.7 4.6 15.3c0-3.3 2.6-6 5.8-6.2v2.6c-1.8.2-3.2 1.7-3.2 3.6 0 2 1.6 3.6 3.6 3.6s3.6-1.6 3.6-3.6V3z" />
+    </svg>
+  );
+}
+
+function ContactCell({ creator }: { creator: CreatorRow }) {
+  const email = creator.primaryEmail?.emailAddress?.trim() || null;
+  const socials = socialLinks(creator);
+  if (email) {
+    return <span className="block max-w-64 break-all" title={email}>{email}</span>;
+  }
+  if (socials.length === 0) return "—";
+  return (
+    <div className="flex items-center gap-1.5">
+      {socials.map((item) => (
+        <a
+          key={item.kind}
+          href={item.href}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-border text-foreground transition-colors hover:bg-muted"
+          title={item.label}
+          aria-label={item.label}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <SocialIcon kind={item.kind} />
+        </a>
+      ))}
+    </div>
+  );
+}
+
 export function CreatorsTable({ listId, onlyWithEmail = !listId }: { listId?: string; onlyWithEmail?: boolean }) {
   const router = useRouter();
   const [rows, setRows] = useState<CreatorRow[]>([]);
@@ -203,20 +265,20 @@ export function CreatorsTable({ listId, onlyWithEmail = !listId }: { listId?: st
         cell: (info) => info.row.original.subscriberVisibility === "PUBLIC" ? formatNumber(info.getValue()) : info.row.original.subscriberVisibility === "HIDDEN" ? "Hidden" : "Unavailable",
       }),
       columnHelper.display({
-        id: "email",
-        header: "Public email",
-        cell: ({ row }) => {
-          const email = row.original.primaryEmail?.emailAddress;
-          if (!email) return "—";
-          return <span className="block max-w-64 break-all" title={email}>{email}</span>;
-        },
+        id: "contact",
+        header: "Contact",
+        cell: ({ row }) => <ContactCell creator={row.original} />,
       }),
       columnHelper.display({
         id: "status",
         header: "Email status",
         cell: ({ row }) => {
           const status = row.original.primaryEmail?.verificationStatus;
-          if (!status) return null;
+          if (!status) {
+            return socialLinks(row.original).length > 0 ? (
+              <Badge tone="muted">Social only</Badge>
+            ) : null;
+          }
           return <Badge tone={statusTone(status)}>{emailStatusLabel(status)}</Badge>;
         },
       }),
@@ -389,18 +451,33 @@ export function CreatorsTable({ listId, onlyWithEmail = !listId }: { listId?: st
             <DialogTitle>Extraction evidence</DialogTitle>
             <DialogDescription>Only stored public sources are shown. A published address is not consent.</DialogDescription>
           </DialogHeader>
-          {evidence?.primaryEmail ? (
-            <dl className="space-y-2 text-sm">
-              <div><dt className="text-muted-foreground">Email</dt><dd>{evidence.primaryEmail.emailAddress}</dd></div>
-              <div><dt className="text-muted-foreground">Status</dt><dd>{emailStatusLabel(evidence.primaryEmail.verificationStatus)}</dd></div>
-              <div><dt className="text-muted-foreground">Method</dt><dd>{evidence.primaryEmail.extractionMethod}</dd></div>
-              <div><dt className="text-muted-foreground">Source</dt><dd>{evidence.primaryEmail.sourceUrl ? <a className="underline" href={evidence.primaryEmail.sourceUrl} target="_blank" rel="noreferrer">{evidence.primaryEmail.sourceUrl}</a> : "—"}</dd></div>
-              <div><dt className="text-muted-foreground">Page title</dt><dd>{evidence.primaryEmail.pageTitle || "—"}</dd></div>
-              <div><dt className="text-muted-foreground">On official domain</dt><dd>{evidence.primaryEmail.isOnOfficialDomain ? "Yes" : "No"}</dd></div>
-              <div><dt className="text-muted-foreground">Generic inbox</dt><dd>{evidence.primaryEmail.isGenericInbox ? "Yes" : "No"}</dd></div>
-              <div><dt className="text-muted-foreground">Note</dt><dd>{evidence.primaryEmail.provenanceNote}</dd></div>
-            </dl>
-          ) : <p className="text-sm text-muted-foreground">No public email is stored for this creator.</p>}
+          {evidence ? (
+            evidence.primaryEmail ? (
+              <dl className="space-y-2 text-sm">
+                <div><dt className="text-muted-foreground">Email</dt><dd>{evidence.primaryEmail.emailAddress}</dd></div>
+                <div><dt className="text-muted-foreground">Status</dt><dd>{emailStatusLabel(evidence.primaryEmail.verificationStatus)}</dd></div>
+                <div><dt className="text-muted-foreground">Method</dt><dd>{evidence.primaryEmail.extractionMethod}</dd></div>
+                <div><dt className="text-muted-foreground">Source</dt><dd>{evidence.primaryEmail.sourceUrl ? <a className="underline" href={evidence.primaryEmail.sourceUrl} target="_blank" rel="noreferrer">{evidence.primaryEmail.sourceUrl}</a> : "—"}</dd></div>
+                <div><dt className="text-muted-foreground">Page title</dt><dd>{evidence.primaryEmail.pageTitle || "—"}</dd></div>
+                <div><dt className="text-muted-foreground">On official domain</dt><dd>{evidence.primaryEmail.isOnOfficialDomain ? "Yes" : "No"}</dd></div>
+                <div><dt className="text-muted-foreground">Generic inbox</dt><dd>{evidence.primaryEmail.isGenericInbox ? "Yes" : "No"}</dd></div>
+                <div><dt className="text-muted-foreground">Note</dt><dd>{evidence.primaryEmail.provenanceNote}</dd></div>
+              </dl>
+            ) : socialLinks(evidence).length > 0 ? (
+              <dl className="space-y-2 text-sm">
+                {socialLinks(evidence).map((item) => (
+                  <div key={item.label}>
+                    <dt className="text-muted-foreground">{item.label}</dt>
+                    <dd>
+                      <a className="break-all underline" href={item.href} target="_blank" rel="noreferrer">{item.href}</a>
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            ) : (
+              <p className="text-sm text-muted-foreground">No public email or social profile is stored for this creator.</p>
+            )
+          ) : null}
         </DialogContent>
       </Dialog>
       <Dialog open={confirm !== null} onOpenChange={(open) => !open && setConfirm(null)}>

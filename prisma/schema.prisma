@@ -90,6 +90,7 @@ enum JobType {
   VERIFY_EMAILS
   EXPORT_RESULTS
   MATCH_ICP_CHANNELS
+  PRUNE_INACTIVE_CHANNELS
 }
 
 enum ExportScope {
@@ -171,6 +172,7 @@ model Creator {
   @@index([country])
   @@index([subscriberCount])
   @@index([discoveredAt])
+  @@index([lastActiveAt])
   @@index([hidden])
   @@index([emailSearchStatus])
   @@index([discoverySource])

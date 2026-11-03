@@ -1,6 +1,7 @@
 export const APP_NAME = "Creator Email Finder";
 export const COMPANY_NAME = "Wayo Ads";
 export const MIN_CREATOR_SUBSCRIBERS = 5000;
+export const MAX_CREATOR_SUBSCRIBERS = 1_000_000;
 
 export const TARGET_COUNTRIES = [
   { code: "US", name: "United States" },

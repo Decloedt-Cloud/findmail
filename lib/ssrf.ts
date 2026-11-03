@@ -140,7 +140,7 @@ export async function safeFetch(
         dispatcher: safeAgent,
         headers: {
           "user-agent": options.userAgent,
-          accept: "text/html,application/xhtml+xml,text/plain;q=0.9",
+          accept: options.accept ? options.accept.join(",") : "text/html,application/xhtml+xml,text/plain;q=0.9",
         },
       });
 

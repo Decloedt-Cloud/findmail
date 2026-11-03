@@ -3,8 +3,9 @@
 import { useEffect, useState } from "react";
 import { ChevronDown, Search } from "lucide-react";
 import { toast } from "sonner";
-import { ALL_COUNTRIES, MIN_CREATOR_SUBSCRIBERS } from "@/lib/constants";
+import { MAX_CREATOR_SUBSCRIBERS, MIN_CREATOR_SUBSCRIBERS } from "@/lib/constants";
 import { DISCOVERY_AUDIENCES, audienceFocus } from "@/lib/youtube/audience";
+import { DISCOVERY_COUNTRIES, DISCOVERY_NICHES } from "@/lib/discovery-catalog";
 import { api } from "@/lib/client";
 import { CreatorResultList } from "@/components/creator-result-list";
 import { Button } from "@/components/ui/button";
@@ -13,21 +14,17 @@ import { formatAgo, formatNumber } from "@/lib/utils";
 import { estimateSearchQuota } from "@/lib/youtube/estimate";
 import type { CreatorRow } from "@/lib/types";
 
-const QUICK_TOPICS = ["Gaming", "Tech", "Finance", "Business", "Fitness", "Beauty", "Education", "Travel", "Food", "Music", "Comedy"];
 const RESULT_COUNTS = [10, 25, 50, 100];
 
 type SearchJob = { id: string; processingJobId: string | null; name: string; status: string; emailCount: number; creatorCount: number; createdAt: string };
 
 export default function DiscoverPage() {
-  const [topic, setTopic] = useState("");
+  const [nicheId, setNicheId] = useState("");
   const [maxResults, setMaxResults] = useState(10);
   const [filtersOpen, setFiltersOpen] = useState(false);
-  const [countries, setCountries] = useState<string[]>(["FR"]);
-  const [extraCountry, setExtraCountry] = useState("");
+  const [country, setCountry] = useState("FR");
   const [minSubscribers, setMinSubscribers] = useState(String(MIN_CREATOR_SUBSCRIBERS));
-  const [maxSubscribers, setMaxSubscribers] = useState("");
-  const [recencyDays, setRecencyDays] = useState("");
-  const [requireEmail, setRequireEmail] = useState(false);
+  const [maxSubscribers, setMaxSubscribers] = useState(String(MAX_CREATOR_SUBSCRIBERS));
   const [jobs, setJobs] = useState<SearchJob[]>([]);
   const [quota, setQuota] = useState<{ used: number; daily: number } | null>(null);
   const [youtube, setYoutube] = useState<boolean | null>(null);
@@ -122,11 +119,10 @@ export default function DiscoverPage() {
     };
   }, [activeJobId, resultSort]);
 
-  const topicKeywords = topic.split(",").map((item) => item.trim()).filter(Boolean);
-  const keywordCount = Math.max(1, topicKeywords.length);
-  const countryCount = Math.max(1, countries.length);
+  const niche = DISCOVERY_NICHES.find((item) => item.id === nicheId) ?? null;
+  const keywordCount = niche ? 1 : 0;
   const minSubscriberCount = Math.max(MIN_CREATOR_SUBSCRIBERS, Number(minSubscribers) || MIN_CREATOR_SUBSCRIBERS);
-  const maxSubscriberCount = maxSubscribers ? Number(maxSubscribers) : undefined;
+  const maxSubscriberCount = Math.min(MAX_CREATOR_SUBSCRIBERS, Math.max(MIN_CREATOR_SUBSCRIBERS, Number(maxSubscribers) || MAX_CREATOR_SUBSCRIBERS));
   const selectedAudience = DISCOVERY_AUDIENCES.find((item) => item.min === minSubscriberCount && item.max === (maxSubscriberCount ?? null))?.id ?? null;
   const audienceHint = {
     small: "Recent videos are searched first, so smaller channels are not buried under the biggest creators.",
@@ -136,27 +132,26 @@ export default function DiscoverPage() {
   }[audienceFocus(minSubscriberCount, maxSubscriberCount)];
   const quotaInput = {
     keywordCount,
-    countryCount,
-    includeRecentVideos: Boolean(recencyDays),
-    keywords: topicKeywords,
-    countries,
+    countryCount: country ? 1 : 0,
+    includeRecentVideos: false,
+    keywords: niche ? [niche.query] : [],
+    countries: country ? [country] : [],
     minSubscribers: minSubscriberCount,
     maxSubscribers: maxSubscriberCount,
   };
   const estimatedQuota = estimateSearchQuota({ ...quotaInput, maxResults });
   const quotaLeft = quota ? Math.max(0, quota.daily - quota.used) : null;
-  const overQuota = quotaLeft != null && estimatedQuota > quotaLeft;
+  const overQuota = niche != null && quotaLeft != null && estimatedQuota > quotaLeft;
   const quotaRatio = quota && quota.daily > 0 ? Math.min(100, Math.round((quota.used / quota.daily) * 100)) : 0;
   const searchFinished = active ? ["COMPLETED", "PARTIALLY_COMPLETED", "FAILED", "CANCELLED"].includes(active.status) : false;
 
   async function findCreators() {
-    const keywords = topic.split(",").map((item) => item.trim()).filter(Boolean).slice(0, 12);
-    if (keywords.length === 0) {
-      toast.error("Enter a topic");
+    if (!niche) {
+      toast.error("Choose a category");
       return;
     }
-    if (countries.length === 0) {
-      toast.error("Choose at least one country in Filters");
+    if (!country) {
+      toast.error("Choose a country");
       return;
     }
     setPending(true);
@@ -164,20 +159,18 @@ export default function DiscoverPage() {
       const result = await api<{ processingJobId: string; estimatedQuota: number }>("/api/discovery/search", {
         method: "POST",
         body: JSON.stringify({
-          keywords,
-          countries,
+          keywords: [niche.query],
+          countries: [country],
           minSubscribers: minSubscriberCount,
           maxSubscribers: maxSubscriberCount,
           maxResults,
-          requirePublicEmail: requireEmail,
-          recencyDays: recencyDays ? Number(recencyDays) : undefined,
         }),
       });
-      toast.success(`Search queued. Estimated quota: ${formatNumber(result.estimatedQuota)} units.`);
+      toast.success(`Search queued. Up to about ${formatNumber(result.estimatedQuota)} API units.`);
       setLive(null);
       setResults([]);
       setResultTotal(0);
-      setActive({ jobId: result.processingJobId, title: keywords[0] ?? topic, status: "QUEUED" });
+      setActive({ jobId: result.processingJobId, title: niche.label, status: "QUEUED" });
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "Search failed");
     } finally {
@@ -267,47 +260,29 @@ export default function DiscoverPage() {
           }}
         >
           <div>
-            <p className="text-xs font-semibold tracking-wide text-muted-foreground">TOPIC</p>
-            <Input
-              className="mt-2 h-12 rounded-2xl"
-              value={topic}
-              onChange={(event) => setTopic(event.target.value)}
-              placeholder="Gaming, AI tools, cooking..."
-              aria-label="Topic"
-            />
-            <p className="mt-2 text-sm text-muted-foreground">Search a topic to find relevant YouTube creators</p>
+            <p className="text-xs font-semibold tracking-wide text-muted-foreground">CATEGORY</p>
+            <Select className="mt-2 h-12 rounded-2xl" value={nicheId} onChange={(event) => setNicheId(event.target.value)} aria-label="Category">
+              <option value="">Choose a category</option>
+              {DISCOVERY_NICHES.map((item) => (
+                <option key={item.id} value={item.id}>{item.label}</option>
+              ))}
+            </Select>
+            <p className="mt-2 text-sm text-muted-foreground">These categories are the ones used to match creators later.</p>
           </div>
 
           <div>
-            <p className="text-xs font-semibold tracking-wide text-muted-foreground">COUNTRIES</p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {countries.map((code) => (
-                <button key={code} type="button" className="rounded-full border bg-card px-3 py-1.5 text-sm" onClick={() => setCountries((current) => current.filter((item) => item !== code))}>
-                  {code} ×
-                </button>
+            <p className="text-xs font-semibold tracking-wide text-muted-foreground">COUNTRY</p>
+            <Select
+              className="mt-2 h-12 rounded-2xl"
+              value={country}
+              onChange={(event) => setCountry(event.target.value)}
+              aria-label="Country"
+            >
+              {DISCOVERY_COUNTRIES.map((item) => (
+                <option key={item.code} value={item.code}>{item.name}</option>
               ))}
-            </div>
-            <p className="mt-2 text-sm text-muted-foreground">
-              {countries.length === 0 ? "Choose at least one country." : "Only channels that declare this country on YouTube are shown."}
-            </p>
-            <div className="mt-2 flex gap-2">
-              <Select value={extraCountry} onChange={(event) => setExtraCountry(event.target.value)} aria-label="Add a country">
-                <option value="">Add a country</option>
-                {ALL_COUNTRIES.filter((country) => !countries.includes(country.code)).map((country) => (
-                  <option key={country.code} value={country.code}>{country.name}</option>
-                ))}
-              </Select>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => {
-                  if (extraCountry) setCountries((current) => [...current, extraCountry]);
-                  setExtraCountry("");
-                }}
-              >
-                Add
-              </Button>
-            </div>
+            </Select>
+            <p className="mt-2 text-sm text-muted-foreground">Only a channel that publishes this country is stored.</p>
           </div>
 
           <div>
@@ -323,7 +298,7 @@ export default function DiscoverPage() {
                     className={`rounded-full border px-4 py-2 text-sm ${selected ? "border-primary bg-primary text-primary-foreground" : "bg-card hover:bg-accent"}`}
                     onClick={() => {
                       setMinSubscribers(String(item.min));
-                      setMaxSubscribers(item.max == null ? "" : String(item.max));
+                      setMaxSubscribers(String(item.max));
                     }}
                   >
                     {item.label}
@@ -332,25 +307,6 @@ export default function DiscoverPage() {
               })}
             </div>
             <p className="mt-2 text-sm text-muted-foreground">{audienceHint}</p>
-          </div>
-
-          <div>
-            <p className="text-xs font-semibold tracking-wide text-muted-foreground">QUICK SEARCH</p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {QUICK_TOPICS.map((item) => {
-                const selected = topic.trim().toLowerCase() === item.toLowerCase();
-                return (
-                  <button
-                    key={item}
-                    type="button"
-                    className={`rounded-full border px-4 py-2 text-sm ${selected ? "border-primary bg-primary text-primary-foreground" : "bg-card hover:bg-accent"}`}
-                    onClick={() => setTopic(item)}
-                  >
-                    {item}
-                  </button>
-                );
-              })}
-            </div>
           </div>
 
           <div className="rounded-2xl border">
@@ -378,12 +334,21 @@ export default function DiscoverPage() {
                     if (!Number.isFinite(value) || value < MIN_CREATOR_SUBSCRIBERS) setMinSubscribers(String(MIN_CREATOR_SUBSCRIBERS));
                   }}
                 />
-                <Input type="number" min={0} placeholder="Max subscribers" aria-label="Maximum subscribers" value={maxSubscribers} onChange={(event) => setMaxSubscribers(event.target.value)} />
-                <Input type="number" min={1} placeholder="Active within days" aria-label="Recent video within days" value={recencyDays} onChange={(event) => setRecencyDays(event.target.value)} />
-                <label className="flex items-start gap-2 text-sm">
-                  <input type="checkbox" className="mt-1 h-4 w-4" checked={requireEmail} onChange={(event) => setRequireEmail(event.target.checked)} />
-                  Also open the public website when a link is written in the description
-                </label>
+                <Input
+                  type="number"
+                  min={MIN_CREATOR_SUBSCRIBERS}
+                  max={MAX_CREATOR_SUBSCRIBERS}
+                  step={1000}
+                  placeholder="Max subscribers"
+                  aria-label="Maximum subscribers"
+                  value={maxSubscribers}
+                  onChange={(event) => setMaxSubscribers(event.target.value)}
+                  onBlur={(event) => {
+                    const value = Number(event.currentTarget.value);
+                    if (!Number.isFinite(value) || value > MAX_CREATOR_SUBSCRIBERS) setMaxSubscribers(String(MAX_CREATOR_SUBSCRIBERS));
+                    else if (value < MIN_CREATOR_SUBSCRIBERS) setMaxSubscribers(String(MIN_CREATOR_SUBSCRIBERS));
+                  }}
+                />
               </div>
             ) : null}
           </div>
@@ -399,7 +364,7 @@ export default function DiscoverPage() {
                     key={count}
                     type="button"
                     disabled={tooCostly}
-                    title={tooCostly ? `Needs about ${formatNumber(cost)} units` : `About ${formatNumber(cost)} units`}
+                    title={`Up to about ${formatNumber(cost)} units`}
                     className={`h-12 rounded-full text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${maxResults === count ? "bg-primary text-primary-foreground" : "border bg-card"}`}
                     onClick={() => setMaxResults(count)}
                   >
@@ -408,13 +373,22 @@ export default function DiscoverPage() {
                 );
               })}
             </div>
-            <p className="mt-2 text-sm text-muted-foreground">Creators are shown even when no public email is found.</p>
+            <p className="mt-2 text-sm text-muted-foreground">Only creators with a usable public email or a social profile are kept.</p>
           </div>
 
-          <Button type="submit" className="h-12 w-full rounded-full text-base" disabled={pending || youtube === false || countries.length === 0 || overQuota}>
-            {pending ? "Finding..." : overQuota ? `${formatNumber(quotaLeft)} units left` : `Find Creators · ~${formatNumber(estimatedQuota)}`}
+          <p className="rounded-2xl border bg-muted/40 px-4 py-3 text-sm">
+            {niche
+              ? `This search uses up to about ${formatNumber(estimatedQuota)} YouTube API units.`
+              : "Choose a category to see how many YouTube API units this search may use."}
+          </p>
+          <Button type="submit" className="h-12 w-full rounded-full text-base" disabled={pending || youtube === false || overQuota}>
+            {pending ? "Finding..." : "Find Creators"}
           </Button>
-          {overQuota ? <p className="text-sm text-muted-foreground">This search needs about {formatNumber(estimatedQuota)} units.</p> : null}
+          {overQuota ? (
+            <p className="text-sm text-muted-foreground">
+              {formatNumber(quotaLeft)} units left today. This search may need up to about {formatNumber(estimatedQuota)}.
+            </p>
+          ) : null}
         </form>
       </section>
 

@@ -11,6 +11,8 @@ import {
 import { audienceSearchPasses } from "@/lib/youtube/audience";
 import { matchTerms, searchQueries } from "@/lib/youtube/terms";
 import { AVERAGE_VIEWS_METHOD, fitViewCount, selectRecentPublicVideos } from "@/lib/youtube/metrics";
+import { MAX_CREATOR_SUBSCRIBERS } from "@/lib/constants";
+import { qualifiesForStorage } from "@/lib/youtube/qualify";
 import type { EmailCandidate } from "@/lib/email/discovery";
 
 export type DiscoveryQuery = {
@@ -209,6 +211,15 @@ export async function discoverYouTubeChannels(
       filteredOut += 1;
       return;
     }
+    if (!qualifiesForStorage({
+      lastActiveAt: channel.lastActiveAt,
+      subscriberCount: channel.subscriberCount,
+      subscriberVisibility: channel.subscriberVisibility,
+      averageViews: channel.averageViews,
+    })) {
+      filteredOut += 1;
+      return;
+    }
     if (kept.length >= wanted) return;
     kept.push(channel);
     persisted.add(channel.id);
@@ -291,7 +302,13 @@ export async function discoverYouTubeChannels(
               filteredOut += fresh.filter((id) => !returned.has(id)).length;
               const pageStrong: DiscoveredChannel[] = [];
               for (const channel of listed) {
-                if (isAutoTopicChannel(channel.title) || !matchesDeclaredCountry(channel.country, query.countries) || !matchesSubscriberRange(channel.subscriberVisibility, channel.subscriberCount, query.minSubscribers, query.maxSubscribers)) {
+                const maxSubscribers = Math.min(query.maxSubscribers ?? MAX_CREATOR_SUBSCRIBERS, MAX_CREATOR_SUBSCRIBERS);
+                if (
+                  isAutoTopicChannel(channel.title) ||
+                  !channel.country ||
+                  !matchesDeclaredCountry(channel.country, query.countries) ||
+                  !matchesSubscriberRange(channel.subscriberVisibility, channel.subscriberCount, query.minSubscribers, maxSubscribers)
+                ) {
                   filteredOut += 1;
                   continue;
                 }

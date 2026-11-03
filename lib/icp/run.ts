@@ -5,17 +5,20 @@ import {
   ICP_COUNTRIES,
   ICP_MAX_SUBSCRIBERS,
   ICP_MIN_SUBSCRIBERS,
+  channelInRequestedRegion,
   icpSearchPlan,
   matchesIcpAudience,
+  regionSearchCodes,
 } from "@/lib/icp/audience";
+import { hasPublicContact } from "@/lib/creators/contact";
 import { writeChannelIcp } from "@/lib/icp/channel-icp";
 import { discoverPublicEmail } from "@/lib/icp/public-email";
 import { UnrecoverableError } from "bullmq";
 import { searchQueriesForIcp } from "@/lib/icp/deepseek";
 import { reuseStoredCreators } from "@/lib/icp/reuse";
+import { selectCreatorsForIcp } from "@/lib/icp/select-creators";
 import { upsertMatchedChannel } from "@/lib/icp/store";
-import { discardCreatorIfUnreachable } from "@/lib/creators/contact";
-import { YouTubeApiError, YouTubeClient, createYouTubeClient, type YouTubeChannel, type YouTubeVideoDetails } from "@/lib/youtube/client";
+import { YouTubeApiError, YouTubeClient, createYouTubeClient, matchesSubscriberRange, type YouTubeChannel, type YouTubeVideoDetails } from "@/lib/youtube/client";
 import { selectRecentPublicVideos } from "@/lib/youtube/metrics";
 
 export async function runMatchIcpChannels(processingJobId: string) {
@@ -43,62 +46,125 @@ export async function runMatchIcpChannels(processingJobId: string) {
       data: { searchQueries: analyzed.queries, analysisNote: analyzed.note || null },
     });
 
+    const countries = snapshotCountries(brand.snapshot);
     const target = channelTarget(brand.snapshot);
+    const requestId = snapshotRequestId(brand.snapshot);
+    const alreadyProposed = requestId
+      ? await creatorsProposedOnOtherRequests(brand.wayoOnboardingId, brand.id, requestId)
+      : { creatorIds: [] as string[], youtubeChannelIds: new Set<string>() };
     const reused = await reuseStoredCreators({
       brandIcpId: brand.id,
       brandName: brand.brandName,
       snapshot: brand.snapshot,
       searchQueries: analyzed.queries,
       limit: target,
+      countries,
+      excludeCreatorIds: alreadyProposed.creatorIds,
     });
     const remaining = Math.max(0, target - reused);
     const found = remaining > 0
-      ? await findAudienceChannels(analyzed.queries, remaining)
+      ? await findAudienceChannels(analyzed.queries, remaining, countries, alreadyProposed.youtubeChannelIds)
       : { channels: [], inspected: 0, quotaStopped: false };
     if (reused === 0 && found.channels.length === 0) {
-      throw new UnrecoverableError(
-        found.quotaStopped
-          ? "The daily YouTube quota was reached before a matching channel was found."
+      if (found.quotaStopped) {
+        throw new UnrecoverableError(
+          "The daily YouTube quota was reached before a matching channel was found.",
+        );
+      }
+      await completeMatchWithNoChannels({
+        brandId: brand.id,
+        processingJobId,
+        inspected: found.inspected,
+        note: countries.length
+          ? "No public YouTube channel was found in the requested countries for this ICP."
           : "No public channel in Europe, North America, North Africa, or the Gulf has between 5,000 and 1,000,000 subscribers for this ICP.",
-      );
+      });
+      return;
     }
 
+    const blocked = new Set(alreadyProposed.creatorIds);
+    const freshCreators = [];
+    const createdCandidateIds: string[] = [];
     for (const channel of found.channels) {
-      const creator = await upsertMatchedChannel(channel.channel, channel.publishedAt, channel.averageViews);
+      const { creator, created } = await upsertMatchedChannel(
+        channel.channel,
+        channel.publishedAt,
+        channel.averageViews,
+      );
+      if (blocked.has(creator.id)) continue;
+      if (created) createdCandidateIds.push(creator.id);
+      freshCreators.push(creator);
+    }
+    let selectedFresh = await selectCreatorsForIcp({
+      brandName: brand.brandName,
+      snapshot: brand.snapshot,
+      searchQueries: analyzed.queries,
+      candidates: freshCreators.map((creator) => ({
+        id: creator.id,
+        channelName: creator.channelName,
+        description: creator.description,
+        keywords: creator.keywords,
+        channelIcp: creator.channelIcp,
+      })),
+      limit: remaining,
+    });
+    const deepseekSelected = selectedFresh.length;
+    if (selectedFresh.length === 0 && freshCreators.length > 0) {
+      // DeepSeek often returns [] on niche B2B ICPs; keep reachable channels, else top pool for contact crawl.
+      selectedFresh = await fallbackSelectableCreators(
+        freshCreators.map((creator) => creator.id),
+        remaining,
+      );
+      logger.info("icp creator select fallback", {
+        brandIcpId: brand.id,
+        candidates: freshCreators.length,
+        kept: selectedFresh.length,
+      });
+    }
+    const selectedSet = new Set(selectedFresh);
+    for (const creatorId of selectedFresh) {
       await prisma.icpChannelMatch.upsert({
-        where: { brandIcpId_creatorId: { brandIcpId: brand.id, creatorId: creator.id } },
-        create: { brandIcpId: brand.id, creatorId: creator.id },
+        where: { brandIcpId_creatorId: { brandIcpId: brand.id, creatorId } },
+        create: { brandIcpId: brand.id, creatorId },
         update: {},
+      });
+    }
+    const orphanIds = createdCandidateIds.filter((id) => !selectedSet.has(id));
+    if (orphanIds.length > 0) {
+      await prisma.jobItem.updateMany({ where: { creatorId: { in: orphanIds } }, data: { creatorId: null } });
+      await prisma.creator.deleteMany({
+        where: {
+          id: { in: orphanIds },
+          icpChannels: { none: {} },
+        },
       });
     }
 
     await attachPublicEmails(brand.id);
-    const linked = await prisma.icpChannelMatch.findMany({
-      where: { brandIcpId: brand.id },
-      select: { creatorId: true },
-    });
-    for (const link of linked) {
-      const dropped = await discardCreatorIfUnreachable(link.creatorId);
-      if (dropped) logger.info("creator dropped, no email or social", { creatorId: link.creatorId });
-    }
-
-    const kept = await prisma.creator.findMany({
-      where: { channelIcp: { equals: Prisma.DbNull }, icpChannels: { some: { brandIcpId: brand.id } } },
-      select: { id: true, youtubeChannelId: true },
-    });
-    const byYoutube = new Map(found.channels.map((row) => [row.channel.id, row.channel]));
-    for (const creator of kept) {
-      const channel = byYoutube.get(creator.youtubeChannelId);
-      if (!channel) continue;
-      try {
-        const profile = await writeChannelIcp(channel);
-        await prisma.creator.update({ where: { id: creator.id }, data: { channelIcp: profile } });
-      } catch (error) {
-        logger.error("channel icp failed", { creatorId: creator.id, message: error instanceof Error ? error.message : "unknown" });
-      }
+    await writeMissingChannelIcps(brand.id, found.channels.map((row) => row.channel));
+    await pruneUnusableMatches(brand.id);
+    // Channels created for this run must not stay in the catalog without a contact.
+    if (createdCandidateIds.length > 0) {
+      await discardCreatedWithoutContact(createdCandidateIds);
     }
 
     const channelCount = await prisma.icpChannelMatch.count({ where: { brandIcpId: brand.id } });
+    if (channelCount === 0) {
+      const noRelevance = deepseekSelected === 0 && selectedFresh.length === 0;
+      await completeMatchWithNoChannels({
+        brandId: brand.id,
+        processingJobId,
+        inspected: reused + found.inspected,
+        note: noRelevance
+          ? countries.length
+            ? "No YouTube channel clearly matched this ICP in the requested countries."
+            : "No YouTube channel clearly matched this ICP."
+          : countries.length
+            ? "Matching channels were found, but none had public contact details in the requested countries."
+            : "Matching channels were found, but none had public contact details (email, Instagram, X, or TikTok).",
+      });
+      return;
+    }
     await prisma.brandIcp.update({
       where: { id: brand.id },
       data: {
@@ -136,24 +202,67 @@ export async function runMatchIcpChannels(processingJobId: string) {
 }
 
 const SEARCH_RESULTS = 50;
-const CHANNEL_TARGET = 30;
+const CHANNEL_TARGET = 50;
+
+function snapshotCountries(snapshot: unknown): string[] {
+  const raw = snapshot && typeof snapshot === "object" ? (snapshot as { countries?: unknown }).countries : null;
+  if (!Array.isArray(raw)) return [];
+  return [...new Set(raw.flatMap((code) => {
+    if (typeof code !== "string" || !/^[A-Za-z]{2}$/.test(code.trim())) return [];
+    return [code.trim().toUpperCase()];
+  }))];
+}
 
 function channelTarget(snapshot: unknown) {
   const raw = snapshot && typeof snapshot === "object" ? Number((snapshot as { maxChannels?: unknown }).maxChannels) : NaN;
-  if (Number.isFinite(raw) && raw >= 1 && raw <= 30) return Math.floor(raw);
+  if (Number.isFinite(raw) && raw >= 1 && raw <= 50) return Math.floor(raw);
   return CHANNEL_TARGET;
+}
+
+/** Empty match is a finished search, not a failed job. Wayo can re-queue later. */
+async function completeMatchWithNoChannels(input: {
+  brandId: string;
+  processingJobId: string;
+  inspected: number;
+  note: string;
+}) {
+  await prisma.brandIcp.update({
+    where: { id: input.brandId },
+    data: {
+      status: "COMPLETED",
+      matchedChannelCount: 0,
+      errorSummary: input.note.slice(0, 800),
+    },
+  });
+  await prisma.processingJob.update({
+    where: { id: input.processingJobId },
+    data: {
+      status: "COMPLETED",
+      progress: 100,
+      totalRecords: input.inspected,
+      processedRecords: input.inspected,
+      successCount: 0,
+      errorSummary: input.note.slice(0, 800),
+      completedAt: new Date(),
+    },
+  });
 }
 
 async function attachPublicEmails(brandIcpId: string) {
   const pending = await prisma.creator.findMany({
     where: {
-      emailSearchStatus: "NOT_SEARCHED",
+      // Retry NOT_FOUND so a previous empty search does not lock the channel in.
+      emailSearchStatus: { in: ["NOT_SEARCHED", "NOT_FOUND"] },
       icpChannels: { some: { brandIcpId } },
     },
     select: { id: true },
   });
   for (const creator of pending) {
     try {
+      await prisma.creator.update({
+        where: { id: creator.id },
+        data: { emailSearchStatus: "NOT_SEARCHED" },
+      });
       await discoverPublicEmail(creator.id);
     } catch (error) {
       logger.error("icp public email failed", {
@@ -164,7 +273,228 @@ async function attachPublicEmails(brandIcpId: string) {
   }
 }
 
-async function findAudienceChannels(queries: string[], target: number) {
+async function writeMissingChannelIcps(brandIcpId: string, youtubeChannels: YouTubeChannel[]) {
+  const byYoutube = new Map(youtubeChannels.map((channel) => [channel.id, channel]));
+  const missing = await prisma.creator.findMany({
+    where: {
+      channelIcp: { equals: Prisma.DbNull },
+      icpChannels: { some: { brandIcpId } },
+    },
+    select: {
+      id: true,
+      youtubeChannelId: true,
+      channelName: true,
+      description: true,
+      keywords: true,
+      country: true,
+    },
+  });
+  for (const creator of missing) {
+    const youtube = byYoutube.get(creator.youtubeChannelId);
+    const source = youtube
+      ? {
+          id: youtube.id,
+          title: youtube.title,
+          description: youtube.description,
+          keywords: youtube.keywords,
+          country: youtube.country,
+        }
+      : {
+          id: creator.youtubeChannelId,
+          title: creator.channelName,
+          description: creator.description || "",
+          keywords: creator.keywords,
+          country: creator.country,
+        };
+    try {
+      const profile = await writeChannelIcp(source);
+      await prisma.creator.update({ where: { id: creator.id }, data: { channelIcp: profile } });
+    } catch (error) {
+      logger.error("channel icp failed", {
+        creatorId: creator.id,
+        message: error instanceof Error ? error.message : "unknown",
+      });
+    }
+  }
+}
+
+/** Prefer creators that already expose a public contact; otherwise keep the top of the pool for email crawl. */
+async function fallbackSelectableCreators(creatorIds: string[], limit: number) {
+  if (limit <= 0 || creatorIds.length === 0) return [];
+  const rows = await prisma.creator.findMany({
+    where: { id: { in: creatorIds } },
+    select: {
+      id: true,
+      subscriberCount: true,
+      instagramUrl: true,
+      twitterUrl: true,
+      tiktokUrl: true,
+      emails: {
+        where: {
+          verificationStatus: { notIn: ["INVALID", "NOT_FOUND"] as const },
+          emailAddress: { not: "" },
+        },
+        select: { id: true },
+        take: 1,
+      },
+    },
+  });
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const ordered = creatorIds
+    .map((id) => byId.get(id))
+    .filter((row): row is (typeof rows)[number] => Boolean(row));
+  const reachable = ordered.filter((row) =>
+    hasPublicContact({
+      instagramUrl: row.instagramUrl,
+      twitterUrl: row.twitterUrl,
+      tiktokUrl: row.tiktokUrl,
+      emailCount: row.emails.length,
+    }),
+  );
+  const pool = reachable.length > 0 ? reachable : ordered;
+  return pool
+    .slice()
+    .sort((a, b) => (b.subscriberCount ?? 0) - (a.subscriberCount ?? 0))
+    .slice(0, limit)
+    .map((row) => row.id);
+}
+
+async function discardCreatedWithoutContact(creatorIds: string[]) {
+  const rows = await prisma.creator.findMany({
+    where: { id: { in: creatorIds } },
+    select: {
+      id: true,
+      instagramUrl: true,
+      twitterUrl: true,
+      tiktokUrl: true,
+      emails: {
+        where: {
+          verificationStatus: { notIn: ["INVALID", "NOT_FOUND"] as const },
+          emailAddress: { not: "" },
+        },
+        select: { id: true },
+        take: 1,
+      },
+      _count: { select: { icpChannels: true } },
+    },
+  });
+  for (const creator of rows) {
+    if (
+      hasPublicContact({
+        instagramUrl: creator.instagramUrl,
+        twitterUrl: creator.twitterUrl,
+        tiktokUrl: creator.tiktokUrl,
+        emailCount: creator.emails.length,
+      })
+    ) {
+      continue;
+    }
+    if (creator._count.icpChannels > 0) continue;
+    await prisma.jobItem.updateMany({ where: { creatorId: creator.id }, data: { creatorId: null } });
+    await prisma.creator.deleteMany({ where: { id: creator.id } });
+  }
+}
+
+/** Drop matches Wayo cannot propose: no usable contact, or no channel ICP.
+ *  Creators left without contact (and without another ICP link) are removed from the catalog. */
+async function pruneUnusableMatches(brandIcpId: string) {
+  const matches = await prisma.icpChannelMatch.findMany({
+    where: { brandIcpId },
+    select: {
+      id: true,
+      creatorId: true,
+      creator: {
+        select: {
+          id: true,
+          channelIcp: true,
+          instagramUrl: true,
+          twitterUrl: true,
+          tiktokUrl: true,
+          emails: {
+            where: {
+              verificationStatus: { notIn: ["INVALID", "NOT_FOUND"] as const },
+              emailAddress: { not: "" },
+            },
+            select: { id: true },
+            take: 1,
+          },
+        },
+      },
+    },
+  });
+  const dropped = matches.filter((match) => {
+    const creator = match.creator;
+    const reachable = hasPublicContact({
+      instagramUrl: creator.instagramUrl,
+      twitterUrl: creator.twitterUrl,
+      tiktokUrl: creator.tiktokUrl,
+      emailCount: creator.emails.length,
+    });
+    const hasIcp = creator.channelIcp != null;
+    return !reachable || !hasIcp;
+  });
+  if (dropped.length === 0) return;
+
+  await prisma.icpChannelMatch.deleteMany({ where: { id: { in: dropped.map((row) => row.id) } } });
+
+  const unreachableIds = [
+    ...new Set(
+      dropped
+        .filter((row) => {
+          const creator = row.creator;
+          return !hasPublicContact({
+            instagramUrl: creator.instagramUrl,
+            twitterUrl: creator.twitterUrl,
+            tiktokUrl: creator.tiktokUrl,
+            emailCount: creator.emails.length,
+          });
+        })
+        .map((row) => row.creatorId),
+    ),
+  ];
+  for (const creatorId of unreachableIds) {
+    const stillLinked = await prisma.icpChannelMatch.count({ where: { creatorId } });
+    if (stillLinked > 0) continue;
+    await prisma.jobItem.updateMany({ where: { creatorId }, data: { creatorId: null } });
+    await prisma.creator.deleteMany({ where: { id: creatorId } });
+  }
+}
+
+function snapshotRequestId(snapshot: unknown) {
+  if (!snapshot || typeof snapshot !== "object") return "";
+  const id = (snapshot as { requestId?: unknown }).requestId;
+  return typeof id === "string" ? id : "";
+}
+
+/** Creators already proposed for a different request of this onboarding. */
+async function creatorsProposedOnOtherRequests(onboardingId: string, brandIcpId: string, requestId: string) {
+  const rows = await prisma.brandIcp.findMany({
+    where: { wayoOnboardingId: onboardingId, id: { not: brandIcpId } },
+    select: {
+      snapshot: true,
+      channels: { select: { creatorId: true, creator: { select: { youtubeChannelId: true } } } },
+    },
+  });
+  const creatorIds: string[] = [];
+  const youtubeChannelIds = new Set<string>();
+  for (const row of rows) {
+    const other = snapshotRequestId(row.snapshot);
+    if (!other || other === requestId) continue;
+    for (const link of row.channels) {
+      creatorIds.push(link.creatorId);
+      if (link.creator.youtubeChannelId) youtubeChannelIds.add(link.creator.youtubeChannelId);
+    }
+  }
+  return { creatorIds: [...new Set(creatorIds)], youtubeChannelIds };
+}
+
+async function findAudienceChannels(
+  queries: string[],
+  target: number,
+  countries: string[] = [],
+  skipChannelIds: Set<string> = new Set(),
+) {
+  const poolTarget = target * 3;
   const kept = new Map<string, { channel: YouTubeChannel; publishedAt: Date | null; averageViews: number | null }>();
   let inspected = 0;
   const filtered = {
@@ -197,44 +527,68 @@ async function findAudienceChannels(queries: string[], target: number) {
     },
   );
   let quotaStopped = false;
-  for (const { query } of icpSearchPlan(queries)) {
-    if (kept.size >= target) break;
-    let page;
-      try {
-        page = await searchClient.search({
-          query,
-          type: "channel",
-          order: "relevance",
-          maxResults: SEARCH_RESULTS,
-        });
-      } catch (error) {
-        if (error instanceof YouTubeApiError && error.code === "QUOTA") {
-          quotaStopped = true;
-          break;
+  const singleCountry = countries.length === 1;
+  const regions = countries.length === 0 ? [undefined] : countries.length <= 20 ? countries : regionSearchCodes(countries);
+  const phrases = icpSearchPlan(queries);
+  const maxPages = singleCountry ? 2 : 1;
+  for (const regionCode of regions) {
+    if (kept.size >= poolTarget || quotaStopped) break;
+    for (const { query } of phrases) {
+      if (kept.size >= poolTarget || quotaStopped) break;
+      let pageToken: string | undefined;
+      for (let pageIndex = 0; pageIndex < maxPages && kept.size < poolTarget; pageIndex += 1) {
+        let page;
+        try {
+          page = await searchClient.search({
+            query,
+            type: "channel",
+            order: "relevance",
+            maxResults: SEARCH_RESULTS,
+            regionCode,
+            pageToken,
+          });
+        } catch (error) {
+          if (error instanceof YouTubeApiError && error.code === "QUOTA") {
+            quotaStopped = true;
+            break;
+          }
+          throw error;
         }
-        throw error;
-      }
-      const fresh = [...new Set(page.items.map((item) => item.channelId).filter(Boolean))];
-      inspected += fresh.length;
-      if (fresh.length === 0) continue;
-      const channels = await loadChannels(fresh, searchClient);
-      for (const channel of channels) {
-        if (!matchesIcpAudience(channel)) {
-          if (!channel.country) filtered.missingCountry += 1;
-          else if (!ICP_COUNTRIES.includes(channel.country)) filtered.outsideRegion += 1;
-          else if (channel.subscriberVisibility !== "PUBLIC" || channel.subscriberCount == null) filtered.hiddenSubscribers += 1;
-          else if (channel.subscriberCount < ICP_MIN_SUBSCRIBERS) filtered.belowMinimum += 1;
-          else if (channel.subscriberCount > ICP_MAX_SUBSCRIBERS) filtered.aboveMaximum += 1;
-          continue;
+        pageToken = page.nextPageToken;
+        const fresh = [...new Set(page.items.map((item) => item.channelId).filter(Boolean))];
+        inspected += fresh.length;
+        if (fresh.length > 0) {
+          const channels = await loadChannels(fresh, searchClient);
+          for (const channel of channels) {
+            const inRegion = countries.length
+              ? channelInRequestedRegion(channel.country, countries)
+              : ICP_COUNTRIES.includes((channel.country || "").toUpperCase());
+            const inBand = matchesSubscriberRange(
+              channel.subscriberVisibility,
+              channel.subscriberCount,
+              ICP_MIN_SUBSCRIBERS,
+              ICP_MAX_SUBSCRIBERS,
+            );
+            const strict = countries.length ? inRegion && inBand : matchesIcpAudience(channel);
+            if (skipChannelIds.has(channel.id)) continue;
+            if (strict) kept.set(channel.id, { channel, publishedAt: null, averageViews: null });
+            else if (!channel.country) filtered.missingCountry += 1;
+            else if (!inRegion) filtered.outsideRegion += 1;
+            else if (channel.subscriberVisibility !== "PUBLIC" || channel.subscriberCount == null) filtered.hiddenSubscribers += 1;
+            else if ((channel.subscriberCount ?? 0) < ICP_MIN_SUBSCRIBERS) filtered.belowMinimum += 1;
+            else filtered.aboveMaximum += 1;
+          }
+          logger.info("icp channel filter", {
+            regionCode: regionCode ?? null,
+            searchResults: page.items.length,
+            channelMetadata: channels.length,
+            kept: kept.size,
+            ...filtered,
+          });
         }
-        kept.set(channel.id, { channel, publishedAt: null, averageViews: null });
+        if (!pageToken) break;
       }
-      logger.info("icp channel filter", {
-        searchResults: page.items.length,
-        channelMetadata: channels.length,
-        kept: kept.size,
-        ...filtered,
-      });
+    }
   }
   const selected = [...kept.values()].slice(0, target);
   const uploadIds = new Map<string, string[]>();
@@ -278,7 +632,7 @@ async function findAudienceChannels(queries: string[], target: number) {
     const active = activity.lastActiveAt ? new Date(activity.lastActiveAt) : null;
     if (active && !Number.isNaN(active.getTime())) entry.publishedAt = active;
   }
-  return { channels: selected, inspected, quotaStopped };
+  return { channels: selected.slice(0, target), inspected, quotaStopped };
 }
 
 async function loadChannels(ids: string[], client: YouTubeClient) {

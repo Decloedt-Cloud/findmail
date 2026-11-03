@@ -1,21 +1,12 @@
 import { ICP_AUDIENCE_KEY } from "@/lib/icp/audience";
 import { ApiError } from "@/lib/authz";
 import { prisma } from "@/lib/db";
+import { icpHost, icpIdentityKey } from "@/lib/icp/identity";
 import { enqueueProcessingJob } from "@/lib/jobs/queue";
 import type { wayoAdsIcpSchema } from "@/lib/schemas";
 import type { z } from "zod";
 
 type IcpInput = z.infer<typeof wayoAdsIcpSchema>;
-
-function websiteKey(value: string) {
-  try {
-    const url = new URL(value);
-    const host = url.hostname.replace(/^www\./, "").toLowerCase();
-    return `${host}${url.pathname.replace(/\/+$/, "")}`;
-  } catch {
-    return value.trim().toLowerCase().replace(/\/+$/, "");
-  }
-}
 
 function snapshotRequestId(snapshot: unknown) {
   if (!snapshot || typeof snapshot !== "object") return "";
@@ -32,8 +23,9 @@ function buildSnapshot(input: IcpInput, maxChannels: number) {
     offers: input.icp.offers,
     requestId: input.requestId ?? null,
     matchingText: input.matchingText ?? null,
-    request: input.request ?? null,
-    maxChannels,
+  request: input.request ?? null,
+  countries: (input.countries ?? []).map((code) => code.toUpperCase()),
+  maxChannels,
     persistedAt: new Date().toISOString(),
   };
 }
@@ -42,7 +34,7 @@ async function queueBrand(input: IcpInput, existingId: string | null, snapshot: 
   const job = await prisma.processingJob.create({
     data: {
       type: "MATCH_ICP_CHANNELS",
-      name: `ICP ${input.brandName}`.slice(0, 120),
+      name: (input.stage === "complex" ? `ICP match ${input.brandName}` : `ICP ${input.brandName}`).slice(0, 120),
       payload: { onboardingId: input.onboardingId, requestId: input.requestId ?? null },
       totalRecords: snapshot.maxChannels,
     },
@@ -83,45 +75,54 @@ async function queueBrand(input: IcpInput, existingId: string | null, snapshot: 
   return { id: brand.id, status: "QUEUED" as const, queued: true as const };
 }
 
+function snapshotCountries(snapshot: unknown) {
+  if (!snapshot || typeof snapshot !== "object") return [];
+  const raw = (snapshot as { countries?: unknown }).countries;
+  if (!Array.isArray(raw)) return [];
+  return raw.flatMap((code) => (typeof code === "string" && /^[A-Za-z]{2}$/.test(code) ? [code.toUpperCase()] : []));
+}
+
+function sameCountryList(stored: string[], requested: string[] | undefined) {
+  const next = [...new Set((requested ?? []).map((code) => code.toUpperCase()))].sort();
+  if (next.length === 0) return true;
+  return [...stored].sort().join(",") === next.join(",");
+}
+
+function isHealthyIcp(row: { status: string; matchedChannelCount: number }) {
+  return row.status === "QUEUED" || row.status === "RUNNING" || (row.status === "COMPLETED" && row.matchedChannelCount > 0);
+}
+
+async function findBrandCopies(brandName: string, websiteUrl: string) {
+  const host = icpHost(websiteUrl);
+  const key = icpIdentityKey(brandName, websiteUrl);
+  const rows = await prisma.brandIcp.findMany({
+    where: {
+      brandName: { equals: brandName, mode: "insensitive" },
+      ...(host ? { websiteUrl: { contains: host, mode: "insensitive" } } : {}),
+    },
+    orderBy: { createdAt: "desc" },
+  });
+  return rows.filter((row) => icpIdentityKey(row.brandName, row.websiteUrl) === key);
+}
+
 export async function acceptWayoIcp(input: IcpInput) {
-  const maxChannels = input.maxChannels ?? (input.stage === "complex" ? 10 : 30);
+  const maxChannels = input.maxChannels ?? (input.stage === "complex" ? 20 : 50);
+  const copies = await findBrandCopies(input.brandName, input.websiteUrl);
+
   if (input.stage === "complex" && input.requestId) {
-    const rows = await prisma.brandIcp.findMany({
-      where: { wayoOnboardingId: input.onboardingId },
-      orderBy: { createdAt: "desc" },
-    });
-    const same = rows.find((row) => snapshotRequestId(row.snapshot) === input.requestId) ?? null;
-    if (
-      same &&
-      (same.status === "QUEUED" ||
-        same.status === "RUNNING" ||
-        (same.status === "COMPLETED" && same.matchedChannelCount > 0))
-    ) {
+    const same = copies.find((row) => snapshotRequestId(row.snapshot) === input.requestId) ?? null;
+    if (same && isHealthyIcp(same) && sameCountryList(snapshotCountries(same.snapshot), input.countries)) {
       return { id: same.id, status: same.status, queued: false as const };
     }
     return queueBrand(input, same?.id ?? null, buildSnapshot(input, maxChannels));
   }
 
-  const siteKey = websiteKey(input.websiteUrl);
-  let host = "";
-  try {
-    host = new URL(input.websiteUrl).hostname.replace(/^www\./, "");
-  } catch {
-    host = "";
-  }
-  const rows = await prisma.brandIcp.findMany({
-    where: host ? { websiteUrl: { contains: host, mode: "insensitive" } } : undefined,
-    orderBy: { createdAt: "desc" },
-  });
-  const sameSite = rows.filter(
-    (row) => websiteKey(row.websiteUrl) === siteKey && snapshotRequestId(row.snapshot) === "",
-  );
-  const kept = sameSite.find((row) => row.status === "COMPLETED" && row.matchedChannelCount > 0)
-    ?? sameSite.find((row) => row.status === "QUEUED" || row.status === "RUNNING");
+  const simplified = copies.filter((row) => snapshotRequestId(row.snapshot) === "");
+  const kept = simplified.find((row) => row.status === "COMPLETED" && row.matchedChannelCount > 0)
+    ?? simplified.find((row) => row.status === "QUEUED" || row.status === "RUNNING");
   if (kept) {
     return { id: kept.id, status: kept.status, queued: false as const };
   }
-  const existing = sameSite[0] ?? null;
 
-  return queueBrand(input, existing?.id ?? null, buildSnapshot(input, maxChannels));
+  return queueBrand(input, simplified[0]?.id ?? null, buildSnapshot(input, maxChannels));
 }

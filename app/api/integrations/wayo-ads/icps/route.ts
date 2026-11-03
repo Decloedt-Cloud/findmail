@@ -13,6 +13,7 @@ export async function GET(request: Request) {
     const input = wayoAdsIcpMatchQuerySchema.parse({
       onboardingId: url.searchParams.get("onboardingId") ?? undefined,
       requestId: url.searchParams.get("requestId") ?? undefined,
+      countries: url.searchParams.get("countries") ?? undefined,
     });
     const result = await listWayoIcpMatches(input);
     return NextResponse.json(result);

@@ -3,13 +3,12 @@
 import { useState } from "react";
 
 const MIN_BOUND = 1_000;
-const MAX_BOUND = 5_000_000;
+const MAX_BOUND = 1_000_000;
 const TICKS = [
   { label: "1K", value: 1_000 },
   { label: "10K", value: 10_000 },
   { label: "100K", value: 100_000 },
   { label: "1M", value: 1_000_000 },
-  { label: "5M", value: 5_000_000 },
 ];
 
 function expValue(pct: number) {
@@ -56,7 +55,8 @@ function BoundSlider({
 
   function commit(raw: string) {
     const next = digits(raw);
-    onChange(next && Number(next) > 0 ? next : "");
+    const numeric = Number(next);
+    onChange(next && numeric > 0 ? String(Math.min(numeric, MAX_BOUND)) : "");
     setDraft(null);
   }
 

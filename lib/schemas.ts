@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { MIN_CREATOR_SUBSCRIBERS } from "@/lib/constants";
+import { MAX_CREATOR_SUBSCRIBERS, MIN_CREATOR_SUBSCRIBERS } from "@/lib/constants";
 
 const empty = (value: unknown) => (typeof value === "string" && value.trim() === "" ? undefined : value);
 
@@ -9,8 +9,8 @@ export const discoverySchema = z
     keywords: z.array(z.string().trim().min(1).max(80)).min(1).max(12),
     countries: z.array(z.string().trim().regex(/^[A-Za-z]{2}$/)).min(1).max(8),
     language: z.string().trim().min(2).max(12).optional(),
-    minSubscribers: z.number().int().min(MIN_CREATOR_SUBSCRIBERS).max(500_000_000).default(MIN_CREATOR_SUBSCRIBERS),
-    maxSubscribers: z.number().int().nonnegative().max(500_000_000).optional(),
+    minSubscribers: z.number().int().min(MIN_CREATOR_SUBSCRIBERS).max(MAX_CREATOR_SUBSCRIBERS).default(MIN_CREATOR_SUBSCRIBERS),
+    maxSubscribers: z.number().int().min(MIN_CREATOR_SUBSCRIBERS).max(MAX_CREATOR_SUBSCRIBERS).optional(),
     maxResults: z.number().int().min(1).max(200),
     requirePublicEmail: z.boolean().optional().default(false),
     recencyDays: z.number().int().min(1).max(3650).optional(),
@@ -29,7 +29,8 @@ export const wayoAdsIcpSchema = z.object({
   stage: z.enum(["simplified", "complex"]).optional().default("simplified"),
   requestId: z.string().trim().min(4).max(80).optional(),
   matchingText: z.string().trim().max(4000).optional(),
-  maxChannels: z.number().int().min(1).max(30).optional(),
+  maxChannels: z.number().int().min(1).max(50).optional(),
+  countries: z.array(z.string().trim().regex(/^[A-Za-z]{2}$/)).max(60).optional(),
   request: z
     .object({
       title: icpText.optional(),
@@ -72,6 +73,7 @@ export const wayoAdsIcpSchema = z.object({
 export const wayoAdsIcpMatchQuerySchema = z.object({
   onboardingId: z.string().trim().min(4).max(80),
   requestId: z.string().trim().min(4).max(80).optional(),
+  countries: z.string().trim().max(1200).optional(),
 });
 
 export const wayoAdsCreatorQuerySchema = z.object({

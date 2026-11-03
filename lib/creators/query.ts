@@ -1,5 +1,6 @@
 import type { EmailVerificationStatus, Prisma } from "@prisma/client";
 import { readChannelIcp } from "@/lib/icp/channel-icp";
+import { icpHost, icpIdentityKey, uniqueIcpsByName } from "@/lib/icp/identity";
 import { prisma } from "@/lib/db";
 import { pickPrimaryEmail } from "@/lib/creators/email";
 import { matchesSearchCountry } from "@/lib/youtube/client";
@@ -17,6 +18,7 @@ export type CreatorFilters = {
   q?: string;
   country?: string;
   brandIcpId?: string;
+  brandIcpIds?: string[];
   emailStatus?: string;
   minSubscribers?: number;
   maxSubscribers?: number;
@@ -39,7 +41,8 @@ export function creatorWhere(filters: CreatorFilters): Prisma.CreatorWhereInput 
     ];
   }
   if (filters.country) where.country = filters.country.toUpperCase();
-  if (filters.brandIcpId) where.icpChannels = { some: { brandIcpId: filters.brandIcpId } };
+  if (filters.brandIcpIds?.length) where.icpChannels = { some: { brandIcpId: { in: filters.brandIcpIds } } };
+  else if (filters.brandIcpId) where.icpChannels = { some: { brandIcpId: filters.brandIcpId } };
   if (filters.minSubscribers != null || filters.maxSubscribers != null) {
     where.subscriberCount = {
       ...(filters.minSubscribers != null ? { gte: filters.minSubscribers } : {}),
@@ -85,7 +88,7 @@ export function serializeCreator<
     channelIcp: readChannelIcp("channelIcp" in creator ? creator.channelIcp : null),
     viewCount: creator.viewCount?.toString() ?? null,
     primaryEmail: pickPrimaryEmail(creator.emails),
-    icps: (icpChannels ?? []).map((link) => link.brandIcp),
+    icps: uniqueIcpsByName((icpChannels ?? []).map((link) => link.brandIcp)),
   };
 }
 
@@ -100,8 +103,29 @@ export function creatorMatchesTopic(creator: { channelName: string; channelHandl
   }) === "strong";
 }
 
+/** Every stored copy of the selected brand, so a repeated ICP still filters as one. */
+export async function resolveBrandIcpIds(brandIcpId: string) {
+  const selected = await prisma.brandIcp.findUnique({
+    where: { id: brandIcpId },
+    select: { brandName: true, websiteUrl: true },
+  });
+  if (!selected) return [brandIcpId];
+  const key = icpIdentityKey(selected.brandName, selected.websiteUrl);
+  const host = icpHost(selected.websiteUrl);
+  const rows = await prisma.brandIcp.findMany({
+    where: {
+      brandName: { equals: selected.brandName, mode: "insensitive" },
+      ...(host ? { websiteUrl: { contains: host, mode: "insensitive" } } : {}),
+    },
+    select: { id: true, brandName: true, websiteUrl: true },
+  });
+  const ids = rows.filter((row) => icpIdentityKey(row.brandName, row.websiteUrl) === key).map((row) => row.id);
+  return ids.length ? ids : [brandIcpId];
+}
+
 export async function listCreators(filters: CreatorFilters, page: number, pageSize: number, sort: string, direction: "asc" | "desc") {
-  const where = creatorWhere(filters);
+  const brandIcpIds = filters.brandIcpId ? await resolveBrandIcpIds(filters.brandIcpId) : undefined;
+  const where = creatorWhere({ ...filters, brandIcpIds });
   if (filters.jobId) {
     const search = await prisma.searchJob.findFirst({
       where: { processingJobId: filters.jobId },

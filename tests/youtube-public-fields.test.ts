@@ -81,6 +81,8 @@ describe("average views selection", () => {
   });
 });
 
+const recent = new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString();
+
 describe("discovery enrichment", () => {
   it("fills public fields from search, channels, uploads, and video statistics", async () => {
     const fetchImpl = vi.fn(async (url: string) => {
@@ -109,7 +111,7 @@ describe("discovery enrichment", () => {
       if (parsed.pathname.endsWith("/playlistItems")) {
         return json({
           items: [
-            { contentDetails: { videoId: "new", videoPublishedAt: "2026-02-01T00:00:00Z" } },
+            { contentDetails: { videoId: "new", videoPublishedAt: recent } },
             { contentDetails: { videoId: "vid1", videoPublishedAt: "2026-01-15T00:00:00Z" } },
             { contentDetails: { videoId: "soon", videoPublishedAt: "2026-03-01T00:00:00Z" } },
           ],
@@ -117,7 +119,7 @@ describe("discovery enrichment", () => {
       }
       return json({
         items: [
-          { id: "new", snippet: { title: "New", publishedAt: "2026-02-01T00:00:00Z", liveBroadcastContent: "none" }, statistics: { viewCount: "300" }, status: { privacyStatus: "public" } },
+          { id: "new", snippet: { title: "New", publishedAt: recent, liveBroadcastContent: "none" }, statistics: { viewCount: "300" }, status: { privacyStatus: "public" } },
           { id: "vid1", snippet: { title: "Tool review", description: "Full description", publishedAt: "2026-01-15T00:00:00Z", liveBroadcastContent: "none" }, statistics: { viewCount: "200" }, status: { privacyStatus: "public" } },
           { id: "soon", snippet: { title: "Soon", publishedAt: "2026-03-01T00:00:00Z", liveBroadcastContent: "upcoming" }, statistics: { viewCount: "1" }, status: { privacyStatus: "public" } },
         ],
@@ -134,7 +136,7 @@ describe("discovery enrichment", () => {
     expect(channel?.customUrl).toBe("@ada");
     expect(channel?.subscriberCount).toBe(10);
     expect(channel?.averageViews).toBe(250);
-    expect(channel?.lastActiveAt).toBe("2026-02-01T00:00:00Z");
+    expect(channel?.lastActiveAt).toBe(recent);
     expect(channel?.averageViewsMethod).toBe(AVERAGE_VIEWS_METHOD);
     expect(channel?.matchedVideo).toEqual({
       title: "Tool review",
@@ -187,13 +189,13 @@ describe("discovery enrichment", () => {
         });
       }
       if (parsed.pathname.endsWith("/playlistItems")) {
-        return json({ items: [{ contentDetails: { videoId: "fit", videoPublishedAt: "2026-04-01T00:00:00Z" } }] });
+        return json({ items: [{ contentDetails: { videoId: "fit", videoPublishedAt: recent } }] });
       }
       return json({
         items: [{
           id: "fit",
-          snippet: { title: "Food at home", description: "Bookings cook@kitchen.test", publishedAt: "2026-04-01T00:00:00Z", liveBroadcastContent: "none" },
-          statistics: { viewCount: "40" },
+          snippet: { title: "Food at home", description: "Bookings cook@kitchen.test", publishedAt: recent, liveBroadcastContent: "none" },
+          statistics: { viewCount: "2000" },
           status: { privacyStatus: "public" },
         }],
       });
@@ -231,8 +233,21 @@ describe("discovery enrichment", () => {
           items: [
             { id: "UCtopic", snippet: { title: "MIKE DEAN - Topic", description: "saas@topic.test", country: "US" }, statistics: { subscriberCount: "10", hiddenSubscriberCount: false } },
             { id: "UCnews", snippet: { title: "ABC News", description: "tips@abc.test", country: "US" }, statistics: { subscriberCount: "10", hiddenSubscriberCount: false } },
-            { id: "UCclub", snippet: { title: "SaaS Club", customUrl: "@saasclub", description: "hello@saasclub.test", country: "US" }, statistics: { subscriberCount: "10", hiddenSubscriberCount: false } },
+            { id: "UCclub", snippet: { title: "SaaS Club", customUrl: "@saasclub", description: "hello@saasclub.test", country: "US" }, statistics: { subscriberCount: "10", hiddenSubscriberCount: false }, contentDetails: { relatedPlaylists: { uploads: "UUclub" } } },
           ],
+        });
+      }
+      if (parsed.pathname.endsWith("/playlistItems")) {
+        return json({ items: [{ contentDetails: { videoId: "s", videoPublishedAt: recent } }] });
+      }
+      if (parsed.pathname.endsWith("/videos")) {
+        return json({
+          items: [{
+            id: "s",
+            snippet: { title: "Pricing", publishedAt: recent, liveBroadcastContent: "none" },
+            statistics: { viewCount: "100" },
+            status: { privacyStatus: "public" },
+          }],
         });
       }
       return json({ items: [] });
@@ -274,6 +289,19 @@ describe("discovery enrichment", () => {
           ],
         });
       }
+      if (parsed.pathname.endsWith("/playlistItems")) {
+        return json({ items: [{ contentDetails: { videoId: "s", videoPublishedAt: recent } }] });
+      }
+      if (parsed.pathname.endsWith("/videos")) {
+        return json({
+          items: [{
+            id: "s",
+            snippet: { title: "Pricing", publishedAt: recent, liveBroadcastContent: "none" },
+            statistics: { viewCount: "100" },
+            status: { privacyStatus: "public" },
+          }],
+        });
+      }
       return json({ items: [] });
     });
     const result = await discoverYouTubeChannels(new YouTubeClient("test-key", fetchImpl), {
@@ -286,6 +314,57 @@ describe("discovery enrichment", () => {
       .map((call) => new URL(String(call[0])))
       .filter((url) => url.pathname.endsWith("/playlistItems"));
     expect(playlists.map((url) => url.searchParams.get("playlistId"))).toEqual(["UUclub"]);
+  });
+
+  it("drops a stale channel and a channel whose views are far below its subscribers", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      const parsed = new URL(url);
+      if (parsed.pathname.endsWith("/search")) {
+        return json({
+          items: [
+            { id: { channelId: "UCstale" }, snippet: { channelTitle: "SaaS Stale", description: "saas" } },
+            { id: { channelId: "UCquiet" }, snippet: { channelTitle: "SaaS Quiet", description: "saas" } },
+          ],
+        });
+      }
+      if (parsed.pathname.endsWith("/channels")) {
+        return json({
+          items: [
+            {
+              id: "UCstale",
+              snippet: { title: "SaaS Stale", description: "saas", country: "US" },
+              statistics: { subscriberCount: "10000", hiddenSubscriberCount: false },
+              contentDetails: { relatedPlaylists: { uploads: "UUstale" } },
+            },
+            {
+              id: "UCquiet",
+              snippet: { title: "SaaS Quiet", description: "saas", country: "US" },
+              statistics: { subscriberCount: "100000", hiddenSubscriberCount: false },
+              contentDetails: { relatedPlaylists: { uploads: "UUquiet" } },
+            },
+          ],
+        });
+      }
+      if (parsed.pathname.endsWith("/playlistItems")) {
+        const playlistId = parsed.searchParams.get("playlistId");
+        const publishedAt = playlistId === "UUstale" ? "2020-01-01T00:00:00.000Z" : recent;
+        const videoId = playlistId === "UUstale" ? "old" : "quiet";
+        return json({ items: [{ contentDetails: { videoId, videoPublishedAt: publishedAt } }] });
+      }
+      return json({
+        items: [
+          { id: "old", snippet: { title: "Old", publishedAt: "2020-01-01T00:00:00.000Z", liveBroadcastContent: "none" }, statistics: { viewCount: "9000" }, status: { privacyStatus: "public" } },
+          { id: "quiet", snippet: { title: "Quiet", publishedAt: recent, liveBroadcastContent: "none" }, statistics: { viewCount: "100" }, status: { privacyStatus: "public" } },
+        ],
+      });
+    });
+    const result = await discoverYouTubeChannels(new YouTubeClient("test-key", fetchImpl), {
+      keywords: ["SaaS"],
+      countries: ["US"],
+      maxResults: 5,
+    });
+    expect(result.channels).toEqual([]);
+    expect(result.filteredOut).toBeGreaterThan(0);
   });
 });
 
