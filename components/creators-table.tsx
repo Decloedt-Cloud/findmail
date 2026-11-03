@@ -23,12 +23,39 @@ import { EmptyState, Skeleton } from "@/components/ui/feedback";
 
 const columnHelper = legacyCreateColumnHelper<CreatorRow>();
 
+type SocialKind = "instagram" | "x" | "tiktok";
+
 function socialLinks(creator: CreatorRow) {
   return [
-    creator.instagramUrl?.trim() ? { label: "Instagram", href: creator.instagramUrl.trim() } : null,
-    creator.twitterUrl?.trim() ? { label: "X", href: creator.twitterUrl.trim() } : null,
-    creator.tiktokUrl?.trim() ? { label: "TikTok", href: creator.tiktokUrl.trim() } : null,
-  ].filter((item): item is { label: string; href: string } => Boolean(item));
+    creator.instagramUrl?.trim() ? { kind: "instagram" as const, label: "Instagram", href: creator.instagramUrl.trim() } : null,
+    creator.twitterUrl?.trim() ? { kind: "x" as const, label: "X", href: creator.twitterUrl.trim() } : null,
+    creator.tiktokUrl?.trim() ? { kind: "tiktok" as const, label: "TikTok", href: creator.tiktokUrl.trim() } : null,
+  ].filter((item): item is { kind: SocialKind; label: string; href: string } => Boolean(item));
+}
+
+function SocialIcon({ kind }: { kind: SocialKind }) {
+  const common = { viewBox: "0 0 24 24", className: "h-4 w-4", "aria-hidden": true as const };
+  if (kind === "instagram") {
+    return (
+      <svg {...common} fill="none" stroke="currentColor" strokeWidth="1.8">
+        <rect x="3.5" y="3.5" width="17" height="17" rx="5" />
+        <circle cx="12" cy="12" r="4" />
+        <circle cx="17.4" cy="6.6" r="1" fill="currentColor" stroke="none" />
+      </svg>
+    );
+  }
+  if (kind === "x") {
+    return (
+      <svg {...common} fill="currentColor">
+        <path d="M4 4h3.6l4.2 5.7L16.8 4H20l-6.1 7.2L20.5 20h-3.6l-4.5-6.1L7.2 20H4l6.4-7.6L4 4z" />
+      </svg>
+    );
+  }
+  return (
+    <svg {...common} fill="currentColor">
+      <path d="M14.2 3h2.6c.1 2.2 1.2 3.9 3.2 5v2.5c-1.1 0-2.2-.3-3.2-.9v5.7c0 3.4-2.7 6.2-6.1 6.2S4.6 18.7 4.6 15.3c0-3.3 2.6-6 5.8-6.2v2.6c-1.8.2-3.2 1.7-3.2 3.6 0 2 1.6 3.6 3.6 3.6s3.6-1.6 3.6-3.6V3z" />
+    </svg>
+  );
 }
 
 function ContactCell({ creator }: { creator: CreatorRow }) {
@@ -39,18 +66,19 @@ function ContactCell({ creator }: { creator: CreatorRow }) {
   }
   if (socials.length === 0) return "—";
   return (
-    <div className="flex max-w-64 min-w-0 flex-col gap-0.5">
+    <div className="flex items-center gap-1.5">
       {socials.map((item) => (
         <a
-          key={item.label}
+          key={item.kind}
           href={item.href}
           target="_blank"
           rel="noreferrer"
-          className="truncate text-sm underline"
-          title={item.href}
+          className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-border text-foreground transition-colors hover:bg-muted"
+          title={item.label}
+          aria-label={item.label}
           onClick={(event) => event.stopPropagation()}
         >
-          {item.label}
+          <SocialIcon kind={item.kind} />
         </a>
       ))}
     </div>
