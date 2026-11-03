@@ -23,6 +23,40 @@ import { EmptyState, Skeleton } from "@/components/ui/feedback";
 
 const columnHelper = legacyCreateColumnHelper<CreatorRow>();
 
+function socialLinks(creator: CreatorRow) {
+  return [
+    creator.instagramUrl?.trim() ? { label: "Instagram", href: creator.instagramUrl.trim() } : null,
+    creator.twitterUrl?.trim() ? { label: "X", href: creator.twitterUrl.trim() } : null,
+    creator.tiktokUrl?.trim() ? { label: "TikTok", href: creator.tiktokUrl.trim() } : null,
+  ].filter((item): item is { label: string; href: string } => Boolean(item));
+}
+
+function ContactCell({ creator }: { creator: CreatorRow }) {
+  const email = creator.primaryEmail?.emailAddress?.trim() || null;
+  const socials = socialLinks(creator);
+  if (email) {
+    return <span className="block max-w-64 break-all" title={email}>{email}</span>;
+  }
+  if (socials.length === 0) return "—";
+  return (
+    <div className="flex max-w-64 min-w-0 flex-col gap-0.5">
+      {socials.map((item) => (
+        <a
+          key={item.label}
+          href={item.href}
+          target="_blank"
+          rel="noreferrer"
+          className="truncate text-sm underline"
+          title={item.href}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {item.label}
+        </a>
+      ))}
+    </div>
+  );
+}
+
 export function CreatorsTable({ listId, onlyWithEmail = !listId }: { listId?: string; onlyWithEmail?: boolean }) {
   const router = useRouter();
   const [rows, setRows] = useState<CreatorRow[]>([]);
@@ -203,20 +237,20 @@ export function CreatorsTable({ listId, onlyWithEmail = !listId }: { listId?: st
         cell: (info) => info.row.original.subscriberVisibility === "PUBLIC" ? formatNumber(info.getValue()) : info.row.original.subscriberVisibility === "HIDDEN" ? "Hidden" : "Unavailable",
       }),
       columnHelper.display({
-        id: "email",
-        header: "Public email",
-        cell: ({ row }) => {
-          const email = row.original.primaryEmail?.emailAddress;
-          if (!email) return "—";
-          return <span className="block max-w-64 break-all" title={email}>{email}</span>;
-        },
+        id: "contact",
+        header: "Contact",
+        cell: ({ row }) => <ContactCell creator={row.original} />,
       }),
       columnHelper.display({
         id: "status",
         header: "Email status",
         cell: ({ row }) => {
           const status = row.original.primaryEmail?.verificationStatus;
-          if (!status) return null;
+          if (!status) {
+            return socialLinks(row.original).length > 0 ? (
+              <Badge tone="muted">Social only</Badge>
+            ) : null;
+          }
           return <Badge tone={statusTone(status)}>{emailStatusLabel(status)}</Badge>;
         },
       }),
@@ -389,18 +423,33 @@ export function CreatorsTable({ listId, onlyWithEmail = !listId }: { listId?: st
             <DialogTitle>Extraction evidence</DialogTitle>
             <DialogDescription>Only stored public sources are shown. A published address is not consent.</DialogDescription>
           </DialogHeader>
-          {evidence?.primaryEmail ? (
-            <dl className="space-y-2 text-sm">
-              <div><dt className="text-muted-foreground">Email</dt><dd>{evidence.primaryEmail.emailAddress}</dd></div>
-              <div><dt className="text-muted-foreground">Status</dt><dd>{emailStatusLabel(evidence.primaryEmail.verificationStatus)}</dd></div>
-              <div><dt className="text-muted-foreground">Method</dt><dd>{evidence.primaryEmail.extractionMethod}</dd></div>
-              <div><dt className="text-muted-foreground">Source</dt><dd>{evidence.primaryEmail.sourceUrl ? <a className="underline" href={evidence.primaryEmail.sourceUrl} target="_blank" rel="noreferrer">{evidence.primaryEmail.sourceUrl}</a> : "—"}</dd></div>
-              <div><dt className="text-muted-foreground">Page title</dt><dd>{evidence.primaryEmail.pageTitle || "—"}</dd></div>
-              <div><dt className="text-muted-foreground">On official domain</dt><dd>{evidence.primaryEmail.isOnOfficialDomain ? "Yes" : "No"}</dd></div>
-              <div><dt className="text-muted-foreground">Generic inbox</dt><dd>{evidence.primaryEmail.isGenericInbox ? "Yes" : "No"}</dd></div>
-              <div><dt className="text-muted-foreground">Note</dt><dd>{evidence.primaryEmail.provenanceNote}</dd></div>
-            </dl>
-          ) : <p className="text-sm text-muted-foreground">No public email is stored for this creator.</p>}
+          {evidence ? (
+            evidence.primaryEmail ? (
+              <dl className="space-y-2 text-sm">
+                <div><dt className="text-muted-foreground">Email</dt><dd>{evidence.primaryEmail.emailAddress}</dd></div>
+                <div><dt className="text-muted-foreground">Status</dt><dd>{emailStatusLabel(evidence.primaryEmail.verificationStatus)}</dd></div>
+                <div><dt className="text-muted-foreground">Method</dt><dd>{evidence.primaryEmail.extractionMethod}</dd></div>
+                <div><dt className="text-muted-foreground">Source</dt><dd>{evidence.primaryEmail.sourceUrl ? <a className="underline" href={evidence.primaryEmail.sourceUrl} target="_blank" rel="noreferrer">{evidence.primaryEmail.sourceUrl}</a> : "—"}</dd></div>
+                <div><dt className="text-muted-foreground">Page title</dt><dd>{evidence.primaryEmail.pageTitle || "—"}</dd></div>
+                <div><dt className="text-muted-foreground">On official domain</dt><dd>{evidence.primaryEmail.isOnOfficialDomain ? "Yes" : "No"}</dd></div>
+                <div><dt className="text-muted-foreground">Generic inbox</dt><dd>{evidence.primaryEmail.isGenericInbox ? "Yes" : "No"}</dd></div>
+                <div><dt className="text-muted-foreground">Note</dt><dd>{evidence.primaryEmail.provenanceNote}</dd></div>
+              </dl>
+            ) : socialLinks(evidence).length > 0 ? (
+              <dl className="space-y-2 text-sm">
+                {socialLinks(evidence).map((item) => (
+                  <div key={item.label}>
+                    <dt className="text-muted-foreground">{item.label}</dt>
+                    <dd>
+                      <a className="break-all underline" href={item.href} target="_blank" rel="noreferrer">{item.href}</a>
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            ) : (
+              <p className="text-sm text-muted-foreground">No public email or social profile is stored for this creator.</p>
+            )
+          ) : null}
         </DialogContent>
       </Dialog>
       <Dialog open={confirm !== null} onOpenChange={(open) => !open && setConfirm(null)}>
