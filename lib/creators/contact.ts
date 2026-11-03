@@ -7,6 +7,23 @@ function filled(value: string | null | undefined) {
   return Boolean(value && value.trim());
 }
 
+/** Prisma filter: at least one usable public email or a filled social profile. */
+export const USABLE_CONTACT: Prisma.CreatorWhereInput = {
+  OR: [
+    {
+      emails: {
+        some: {
+          verificationStatus: { notIn: [...UNUSABLE_EMAIL] },
+          emailAddress: { not: "" },
+        },
+      },
+    },
+    { AND: [{ instagramUrl: { not: null } }, { NOT: { instagramUrl: "" } }] },
+    { AND: [{ twitterUrl: { not: null } }, { NOT: { twitterUrl: "" } }] },
+    { AND: [{ tiktokUrl: { not: null } }, { NOT: { tiktokUrl: "" } }] },
+  ],
+};
+
 export function hasPublicContact(row: {
   instagramUrl?: string | null;
   twitterUrl?: string | null;

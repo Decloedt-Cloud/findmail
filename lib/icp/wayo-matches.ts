@@ -1,3 +1,4 @@
+import { USABLE_CONTACT, hasPublicContact } from "@/lib/creators/contact";
 import { usablePublicEmails } from "@/lib/creators/email";
 import { prisma } from "@/lib/db";
 import { ICP_MAX_SUBSCRIBERS, ICP_MIN_SUBSCRIBERS } from "@/lib/icp/audience";
@@ -62,14 +63,7 @@ export async function listWayoIcpMatches(input: { onboardingId: string; requestI
         subscriberVisibility: "PUBLIC",
         subscriberCount: { gte: ICP_MIN_SUBSCRIBERS, lte: ICP_MAX_SUBSCRIBERS },
         AND: [
-          {
-            OR: [
-              { emails: { some: {} } },
-              { instagramUrl: { not: null } },
-              { twitterUrl: { not: null } },
-              { tiktokUrl: { not: null } },
-            ],
-          },
+          USABLE_CONTACT,
           ...(countries.length
             ? [{
                 OR: countries.map((code) => ({ country: { equals: code, mode: "insensitive" as const } })),
@@ -126,12 +120,21 @@ export async function listWayoIcpMatches(input: { onboardingId: string; requestI
     const creator = link.creator;
     const emails = usablePublicEmails(creator.emails);
     const socials = {
-      instagram: creator.instagramUrl,
-      twitter: creator.twitterUrl,
-      tiktok: creator.tiktokUrl,
+      instagram: creator.instagramUrl?.trim() || null,
+      twitter: creator.twitterUrl?.trim() || null,
+      tiktok: creator.tiktokUrl?.trim() || null,
       youtube: creator.channelUrl,
     };
-    if (!emails.length && !socials.instagram && !socials.twitter && !socials.tiktok) return [];
+    if (
+      !hasPublicContact({
+        emailCount: emails.length,
+        instagramUrl: socials.instagram,
+        twitterUrl: socials.twitter,
+        tiktokUrl: socials.tiktok,
+      })
+    ) {
+      return [];
+    }
     return [
       {
         id: creator.id,

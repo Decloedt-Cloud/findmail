@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
+import type { Prisma } from "@prisma/client";
 import { enforceRateLimit, jsonError } from "@/lib/api";
 import { prisma } from "@/lib/db";
 import { assertWayoAdsKey, bearerToken, toWayoAdsCreator } from "@/lib/integrations/wayo-ads";
 import { wayoAdsCreatorQuerySchema } from "@/lib/schemas";
+
+const UNUSABLE_EMAIL = ["INVALID", "NOT_FOUND"] as const;
 
 export async function GET(request: Request) {
   try {
@@ -15,15 +18,21 @@ export async function GET(request: Request) {
       country: url.searchParams.get("country") ?? undefined,
       q: url.searchParams.get("q") ?? undefined,
     });
-    const where = {
+    const where: Prisma.CreatorWhereInput = {
       hidden: false,
-      emails: { some: {} },
+      // Catalog rows must have a usable public email (INVALID / blank do not count).
+      emails: {
+        some: {
+          verificationStatus: { notIn: [...UNUSABLE_EMAIL] },
+          emailAddress: { not: "" },
+        },
+      },
       ...(input.country ? { country: input.country.toUpperCase() } : {}),
       ...(input.q
         ? {
             OR: [
-              { channelName: { contains: input.q, mode: "insensitive" as const } },
-              { channelHandle: { contains: input.q, mode: "insensitive" as const } },
+              { channelName: { contains: input.q, mode: "insensitive" } },
+              { channelHandle: { contains: input.q, mode: "insensitive" } },
             ],
           }
         : {}),

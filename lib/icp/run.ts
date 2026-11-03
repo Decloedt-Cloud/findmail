@@ -10,6 +10,7 @@ import {
   matchesIcpAudience,
   regionSearchCodes,
 } from "@/lib/icp/audience";
+import { hasPublicContact } from "@/lib/creators/contact";
 import { writeChannelIcp } from "@/lib/icp/channel-icp";
 import { discoverPublicEmail } from "@/lib/icp/public-email";
 import { UnrecoverableError } from "bullmq";
@@ -228,13 +229,18 @@ async function completeMatchWithNoChannels(input: {
 async function attachPublicEmails(brandIcpId: string) {
   const pending = await prisma.creator.findMany({
     where: {
-      emailSearchStatus: "NOT_SEARCHED",
+      // Retry NOT_FOUND so a previous empty search does not lock the channel in.
+      emailSearchStatus: { in: ["NOT_SEARCHED", "NOT_FOUND"] },
       icpChannels: { some: { brandIcpId } },
     },
     select: { id: true },
   });
   for (const creator of pending) {
     try {
+      await prisma.creator.update({
+        where: { id: creator.id },
+        data: { emailSearchStatus: "NOT_SEARCHED" },
+      });
       await discoverPublicEmail(creator.id);
     } catch (error) {
       logger.error("icp public email failed", {
@@ -292,28 +298,43 @@ async function writeMissingChannelIcps(brandIcpId: string, youtubeChannels: YouT
 
 /** Drop matches Wayo cannot propose: no usable contact, or no channel ICP. */
 async function pruneUnusableMatches(brandIcpId: string) {
-  await prisma.icpChannelMatch.deleteMany({
-    where: {
-      brandIcpId,
-      OR: [
-        { creator: { channelIcp: { equals: Prisma.DbNull } } },
-        {
-          creator: {
-            AND: [
-              { OR: [{ instagramUrl: null }, { instagramUrl: "" }] },
-              { OR: [{ twitterUrl: null }, { twitterUrl: "" }] },
-              { OR: [{ tiktokUrl: null }, { tiktokUrl: "" }] },
-              {
-                emails: {
-                  none: { verificationStatus: { notIn: ["INVALID", "NOT_FOUND"] } },
-                },
-              },
-            ],
+  const matches = await prisma.icpChannelMatch.findMany({
+    where: { brandIcpId },
+    select: {
+      id: true,
+      creator: {
+        select: {
+          channelIcp: true,
+          instagramUrl: true,
+          twitterUrl: true,
+          tiktokUrl: true,
+          emails: {
+            where: {
+              verificationStatus: { notIn: ["INVALID", "NOT_FOUND"] as const },
+              emailAddress: { not: "" },
+            },
+            select: { id: true },
+            take: 1,
           },
         },
-      ],
+      },
     },
   });
+  const dropIds = matches
+    .filter((match) => {
+      const creator = match.creator;
+      const reachable = hasPublicContact({
+        instagramUrl: creator.instagramUrl,
+        twitterUrl: creator.twitterUrl,
+        tiktokUrl: creator.tiktokUrl,
+        emailCount: creator.emails.length,
+      });
+      const hasIcp = creator.channelIcp != null;
+      return !reachable || !hasIcp;
+    })
+    .map((match) => match.id);
+  if (dropIds.length === 0) return;
+  await prisma.icpChannelMatch.deleteMany({ where: { id: { in: dropIds } } });
 }
 
 function countrySearchPhrases(queries: string[]) {

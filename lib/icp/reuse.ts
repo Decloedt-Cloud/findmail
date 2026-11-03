@@ -1,19 +1,11 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { USABLE_CONTACT } from "@/lib/creators/contact";
 import { ICP_COUNTRIES, ICP_MAX_SUBSCRIBERS, ICP_MIN_SUBSCRIBERS } from "@/lib/icp/audience";
 import { selectCreatorsForIcp } from "@/lib/icp/select-creators";
 import { activeSince, hasEnoughViews } from "@/lib/youtube/qualify";
 
 const CANDIDATE_LIMIT = 150;
-
-const USABLE_CONTACT: Prisma.CreatorWhereInput = {
-  OR: [
-    { emails: { some: { verificationStatus: { notIn: ["INVALID", "NOT_FOUND"] } } } },
-    { AND: [{ instagramUrl: { not: null } }, { NOT: { instagramUrl: "" } }] },
-    { AND: [{ twitterUrl: { not: null } }, { NOT: { twitterUrl: "" } }] },
-    { AND: [{ tiktokUrl: { not: null } }, { NOT: { tiktokUrl: "" } }] },
-  ],
-};
 
 export async function reuseStoredCreators(input: {
   brandIcpId: string;

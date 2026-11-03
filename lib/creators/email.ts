@@ -17,7 +17,10 @@ const CONFIDENCE_RANK: Record<ConfidenceStatus, number> = {
   AMBIGUOUS: 0,
 };
 
-type RankedEmail = Pick<EmailContact, "verificationStatus" | "confidenceStatus"> & { isGenericInbox?: boolean };
+type RankedEmail = Pick<EmailContact, "verificationStatus" | "confidenceStatus"> & {
+  isGenericInbox?: boolean;
+  emailAddress?: string | null;
+};
 
 const UNUSABLE_EMAIL = new Set(["INVALID", "NOT_FOUND"]);
 
@@ -33,9 +36,15 @@ export function pickPrimaryEmail<T extends RankedEmail>(emails: T[]) {
   return usablePublicEmails(emails)[0] ?? null;
 }
 
-/** Every address worth showing. Needs review stays when nothing verified exists. Invalid addresses are dropped. */
+/** Every address worth showing. Needs review stays when nothing verified exists. Invalid or blank addresses are dropped. */
 export function usablePublicEmails<T extends RankedEmail>(emails: T[]) {
-  return emails.filter((email) => !UNUSABLE_EMAIL.has(email.verificationStatus)).sort(compareEmails);
+  return emails
+    .filter((email) => {
+      if (UNUSABLE_EMAIL.has(email.verificationStatus)) return false;
+      if (typeof email.emailAddress === "string" && !email.emailAddress.trim()) return false;
+      return true;
+    })
+    .sort(compareEmails);
 }
 
 export function channelOriginLabel(source: string) {
