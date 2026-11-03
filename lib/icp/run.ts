@@ -130,6 +130,10 @@ export async function runMatchIcpChannels(processingJobId: string) {
     await attachPublicEmails(brand.id);
     await writeMissingChannelIcps(brand.id, found.channels.map((row) => row.channel));
     await pruneUnusableMatches(brand.id);
+    // Channels created for this run must not stay in the catalog without a contact.
+    if (createdCandidateIds.length > 0) {
+      await discardCreatedWithoutContact(createdCandidateIds);
+    }
 
     const channelCount = await prisma.icpChannelMatch.count({ where: { brandIcpId: brand.id } });
     if (channelCount === 0) {
@@ -296,14 +300,53 @@ async function writeMissingChannelIcps(brandIcpId: string, youtubeChannels: YouT
   }
 }
 
-/** Drop matches Wayo cannot propose: no usable contact, or no channel ICP. */
+async function discardCreatedWithoutContact(creatorIds: string[]) {
+  const rows = await prisma.creator.findMany({
+    where: { id: { in: creatorIds } },
+    select: {
+      id: true,
+      instagramUrl: true,
+      twitterUrl: true,
+      tiktokUrl: true,
+      emails: {
+        where: {
+          verificationStatus: { notIn: ["INVALID", "NOT_FOUND"] as const },
+          emailAddress: { not: "" },
+        },
+        select: { id: true },
+        take: 1,
+      },
+      _count: { select: { icpChannels: true } },
+    },
+  });
+  for (const creator of rows) {
+    if (
+      hasPublicContact({
+        instagramUrl: creator.instagramUrl,
+        twitterUrl: creator.twitterUrl,
+        tiktokUrl: creator.tiktokUrl,
+        emailCount: creator.emails.length,
+      })
+    ) {
+      continue;
+    }
+    if (creator._count.icpChannels > 0) continue;
+    await prisma.jobItem.updateMany({ where: { creatorId: creator.id }, data: { creatorId: null } });
+    await prisma.creator.deleteMany({ where: { id: creator.id } });
+  }
+}
+
+/** Drop matches Wayo cannot propose: no usable contact, or no channel ICP.
+ *  Creators left without contact (and without another ICP link) are removed from the catalog. */
 async function pruneUnusableMatches(brandIcpId: string) {
   const matches = await prisma.icpChannelMatch.findMany({
     where: { brandIcpId },
     select: {
       id: true,
+      creatorId: true,
       creator: {
         select: {
+          id: true,
           channelIcp: true,
           instagramUrl: true,
           twitterUrl: true,
@@ -320,21 +363,42 @@ async function pruneUnusableMatches(brandIcpId: string) {
       },
     },
   });
-  const dropIds = matches
-    .filter((match) => {
-      const creator = match.creator;
-      const reachable = hasPublicContact({
-        instagramUrl: creator.instagramUrl,
-        twitterUrl: creator.twitterUrl,
-        tiktokUrl: creator.tiktokUrl,
-        emailCount: creator.emails.length,
-      });
-      const hasIcp = creator.channelIcp != null;
-      return !reachable || !hasIcp;
-    })
-    .map((match) => match.id);
-  if (dropIds.length === 0) return;
-  await prisma.icpChannelMatch.deleteMany({ where: { id: { in: dropIds } } });
+  const dropped = matches.filter((match) => {
+    const creator = match.creator;
+    const reachable = hasPublicContact({
+      instagramUrl: creator.instagramUrl,
+      twitterUrl: creator.twitterUrl,
+      tiktokUrl: creator.tiktokUrl,
+      emailCount: creator.emails.length,
+    });
+    const hasIcp = creator.channelIcp != null;
+    return !reachable || !hasIcp;
+  });
+  if (dropped.length === 0) return;
+
+  await prisma.icpChannelMatch.deleteMany({ where: { id: { in: dropped.map((row) => row.id) } } });
+
+  const unreachableIds = [
+    ...new Set(
+      dropped
+        .filter((row) => {
+          const creator = row.creator;
+          return !hasPublicContact({
+            instagramUrl: creator.instagramUrl,
+            twitterUrl: creator.twitterUrl,
+            tiktokUrl: creator.tiktokUrl,
+            emailCount: creator.emails.length,
+          });
+        })
+        .map((row) => row.creatorId),
+    ),
+  ];
+  for (const creatorId of unreachableIds) {
+    const stillLinked = await prisma.icpChannelMatch.count({ where: { creatorId } });
+    if (stillLinked > 0) continue;
+    await prisma.jobItem.updateMany({ where: { creatorId }, data: { creatorId: null } });
+    await prisma.creator.deleteMany({ where: { id: creatorId } });
+  }
 }
 
 function countrySearchPhrases(queries: string[]) {
