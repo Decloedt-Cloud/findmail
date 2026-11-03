@@ -95,7 +95,7 @@ export async function runMatchIcpChannels(processingJobId: string) {
       if (created) createdCandidateIds.push(creator.id);
       freshCreators.push(creator);
     }
-    const selectedFresh = await selectCreatorsForIcp({
+    let selectedFresh = await selectCreatorsForIcp({
       brandName: brand.brandName,
       snapshot: brand.snapshot,
       searchQueries: analyzed.queries,
@@ -108,6 +108,19 @@ export async function runMatchIcpChannels(processingJobId: string) {
       })),
       limit: remaining,
     });
+    const deepseekSelected = selectedFresh.length;
+    if (selectedFresh.length === 0 && freshCreators.length > 0) {
+      // DeepSeek often returns [] on niche B2B ICPs; keep reachable channels, else top pool for contact crawl.
+      selectedFresh = await fallbackSelectableCreators(
+        freshCreators.map((creator) => creator.id),
+        remaining,
+      );
+      logger.info("icp creator select fallback", {
+        brandIcpId: brand.id,
+        candidates: freshCreators.length,
+        kept: selectedFresh.length,
+      });
+    }
     const selectedSet = new Set(selectedFresh);
     for (const creatorId of selectedFresh) {
       await prisma.icpChannelMatch.upsert({
@@ -137,13 +150,18 @@ export async function runMatchIcpChannels(processingJobId: string) {
 
     const channelCount = await prisma.icpChannelMatch.count({ where: { brandIcpId: brand.id } });
     if (channelCount === 0) {
+      const noRelevance = deepseekSelected === 0 && selectedFresh.length === 0;
       await completeMatchWithNoChannels({
         brandId: brand.id,
         processingJobId,
         inspected: reused + found.inspected,
-        note: countries.length
-          ? "No relevant public channel with contact details was found in the requested countries for this ICP."
-          : "No relevant public channel with contact details was found for this ICP.",
+        note: noRelevance
+          ? countries.length
+            ? "No YouTube channel clearly matched this ICP in the requested countries."
+            : "No YouTube channel clearly matched this ICP."
+          : countries.length
+            ? "Matching channels were found, but none had public contact details in the requested countries."
+            : "Matching channels were found, but none had public contact details (email, Instagram, X, or TikTok).",
       });
       return;
     }
@@ -298,6 +316,47 @@ async function writeMissingChannelIcps(brandIcpId: string, youtubeChannels: YouT
       });
     }
   }
+}
+
+/** Prefer creators that already expose a public contact; otherwise keep the top of the pool for email crawl. */
+async function fallbackSelectableCreators(creatorIds: string[], limit: number) {
+  if (limit <= 0 || creatorIds.length === 0) return [];
+  const rows = await prisma.creator.findMany({
+    where: { id: { in: creatorIds } },
+    select: {
+      id: true,
+      subscriberCount: true,
+      instagramUrl: true,
+      twitterUrl: true,
+      tiktokUrl: true,
+      emails: {
+        where: {
+          verificationStatus: { notIn: ["INVALID", "NOT_FOUND"] as const },
+          emailAddress: { not: "" },
+        },
+        select: { id: true },
+        take: 1,
+      },
+    },
+  });
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const ordered = creatorIds
+    .map((id) => byId.get(id))
+    .filter((row): row is (typeof rows)[number] => Boolean(row));
+  const reachable = ordered.filter((row) =>
+    hasPublicContact({
+      instagramUrl: row.instagramUrl,
+      twitterUrl: row.twitterUrl,
+      tiktokUrl: row.tiktokUrl,
+      emailCount: row.emails.length,
+    }),
+  );
+  const pool = reachable.length > 0 ? reachable : ordered;
+  return pool
+    .slice()
+    .sort((a, b) => (b.subscriberCount ?? 0) - (a.subscriberCount ?? 0))
+    .slice(0, limit)
+    .map((row) => row.id);
 }
 
 async function discardCreatedWithoutContact(creatorIds: string[]) {
