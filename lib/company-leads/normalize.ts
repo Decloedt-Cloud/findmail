@@ -1,3 +1,5 @@
+import { employeeBand, revenueBand } from "./bands";
+
 export type RawCompanyLeadCsvRow = Record<string, string>;
 
 export type NormalizedCompanyLead = {
@@ -21,6 +23,10 @@ export type NormalizedCompanyLead = {
   salesVolume: string | null;
   employeeCount: string | null;
   companyType: string | null;
+  /** 0 MICRO … 3 MEGA, derived from `employeeCount` (null when unparseable). */
+  employeeBand: number | null;
+  /** 0 MICRO … 3 MEGA, derived from `salesVolume` (null when unparseable). */
+  revenueBand: number | null;
 };
 
 function clean(value: string | undefined | null, max = 300): string | null {
@@ -80,6 +86,8 @@ export function normalizeCompanyLeadRow(row: RawCompanyLeadCsvRow): NormalizedCo
     "Unknown company";
 
   const web = normalizeCompanyLeadDomain(cell(row, "WEB ADDRESS", "Website", "WEBSITE", "URL"));
+  const salesVolume = clean(cell(row, "SALES VOLUME"), 80);
+  const employeeCount = clean(cell(row, "NUMBER OF EMPLOYEES"), 40);
 
   return {
     businessName,
@@ -99,8 +107,10 @@ export function normalizeCompanyLeadRow(row: RawCompanyLeadCsvRow): NormalizedCo
     sicCode: clean(cell(row, "SIC"), 20),
     sicName: clean(cell(row, "SIC NAME1", "SIC NAME", "SIC Name"), 200),
     naicsCode: clean(cell(row, "NAICS"), 20),
-    salesVolume: clean(cell(row, "SALES VOLUME"), 80),
-    employeeCount: clean(cell(row, "NUMBER OF EMPLOYEES"), 40),
+    salesVolume,
+    employeeCount,
     companyType: clean(cell(row, "PUBLIC PRIVATE COMPANY"), 40),
+    employeeBand: employeeBand(employeeCount),
+    revenueBand: revenueBand(salesVolume),
   };
 }

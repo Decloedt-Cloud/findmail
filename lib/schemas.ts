@@ -90,8 +90,12 @@ export const wayoAdsCompanyLeadSearchSchema = z.object({
   keywords: z.array(z.string().trim().min(1).max(80)).max(20).default([]),
   sicPrefixes: z.array(codePrefix).max(24).optional().default([]),
   naicsPrefixes: z.array(codePrefix).max(24).optional().default([]),
+  /** Company size bands to keep: 0 MICRO, 1 MID, 2 MACRO, 3 MEGA. Empty = no filter. */
+  bands: z.array(z.number().int().min(0).max(3)).max(4).optional().default([]),
   limit: z.number().int().min(1).max(200).optional().default(120),
   excludeIds: z.array(z.string().trim().min(1).max(80)).max(200).optional().default([]),
+  /** Adds a COUNT(*) for the same window — used by the blurred teaser. */
+  includeTotal: z.boolean().optional().default(false),
 });
 
 export const wayoAdsCompanyLeadSampleQuerySchema = z.object({

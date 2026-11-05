@@ -482,6 +482,10 @@ model CompanyLead {
   naicsCode       String?
   salesVolume     String?
   employeeCount   String?
+  /// 0 MICRO / 1 MID / 2 MACRO / 3 MEGA — derived from `employeeCount` at import.
+  employeeBand    Int?
+  /// 0 MICRO / 1 MID / 2 MACRO / 3 MEGA — derived from `salesVolume` at import.
+  revenueBand     Int?
   companyType     String?
   sourceFile      String
   importBatchId   String

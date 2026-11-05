@@ -8,6 +8,12 @@ export type WayoAdsCompanyLead = {
   sicName: string | null;
   city: string | null;
   state: string | null;
+  /** Raw cells, shown as-is next to the band badge. */
+  employeeCount: string | null;
+  salesVolume: string | null;
+  /** 0 MICRO / 1 MID / 2 MACRO / 3 MEGA — null when the cell was unparseable. */
+  employeeBand: number | null;
+  revenueBand: number | null;
 };
 
 export type WayoAdsCompanyLeadTeaser = {
@@ -24,6 +30,10 @@ const PREFILTER_SELECT = {
   sicName: true,
   mailingCity: true,
   mailingState: true,
+  employeeCount: true,
+  salesVolume: true,
+  employeeBand: true,
+  revenueBand: true,
 } as const;
 
 export { PREFILTER_SELECT };
@@ -31,7 +41,17 @@ export { PREFILTER_SELECT };
 export function toWayoAdsCompanyLead(
   row: Pick<
     CompanyLead,
-    "id" | "businessName" | "domain" | "email" | "sicName" | "mailingCity" | "mailingState"
+    | "id"
+    | "businessName"
+    | "domain"
+    | "email"
+    | "sicName"
+    | "mailingCity"
+    | "mailingState"
+    | "employeeCount"
+    | "salesVolume"
+    | "employeeBand"
+    | "revenueBand"
   >,
 ): WayoAdsCompanyLead {
   return {
@@ -42,6 +62,10 @@ export function toWayoAdsCompanyLead(
     sicName: row.sicName,
     city: row.mailingCity,
     state: row.mailingState,
+    employeeCount: row.employeeCount,
+    salesVolume: row.salesVolume,
+    employeeBand: row.employeeBand,
+    revenueBand: row.revenueBand,
   };
 }
 

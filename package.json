@@ -15,6 +15,7 @@
     "db:deploy": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
     "db:start": "tsx scripts/dev-postgres.ts",
+    "db:backfill-bands": "tsx scripts/backfill-company-lead-bands.ts",
     "import:company-leads": "tsx scripts/import-company-leads-csv.ts"
   },
   "prisma": {

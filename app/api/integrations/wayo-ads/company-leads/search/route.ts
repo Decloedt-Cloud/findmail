@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { enforceRateLimit, jsonError } from "@/lib/api";
-import { searchCompanyLeads } from "@/lib/company-leads/search";
+import { countCompanyLeads, searchCompanyLeads } from "@/lib/company-leads/search";
 import { toWayoAdsCompanyLead } from "@/lib/company-leads/serialize";
 import { assertWayoAdsKey, bearerToken } from "@/lib/integrations/wayo-ads";
 import { wayoAdsCompanyLeadSearchSchema } from "@/lib/schemas";
@@ -11,13 +11,21 @@ export async function POST(request: Request) {
     await enforceRateLimit("wayo-ads:company-leads-search", 60, 60 * 1000);
 
     const body = wayoAdsCompanyLeadSearchSchema.parse(await request.json());
-    const hits = await searchCompanyLeads({
+    const query = {
       keywords: body.keywords,
       sicPrefixes: body.sicPrefixes,
       naicsPrefixes: body.naicsPrefixes,
-      limit: body.limit,
-      excludeIds: body.excludeIds,
-    });
+      bands: body.bands,
+    };
+
+    const [hits, total] = await Promise.all([
+      searchCompanyLeads({
+        ...query,
+        limit: body.limit,
+        excludeIds: body.excludeIds,
+      }),
+      body.includeTotal ? countCompanyLeads(query) : Promise.resolve(null),
+    ]);
 
     return NextResponse.json({
       leads: hits.map((row) =>
@@ -29,8 +37,13 @@ export async function POST(request: Request) {
           sicName: row.sicName,
           mailingCity: row.city,
           mailingState: row.state,
+          employeeCount: row.employeeCount,
+          salesVolume: row.salesVolume,
+          employeeBand: row.employeeBand,
+          revenueBand: row.revenueBand,
         }),
       ),
+      ...(total == null ? {} : { total }),
     });
   } catch (error) {
     return jsonError(error);
