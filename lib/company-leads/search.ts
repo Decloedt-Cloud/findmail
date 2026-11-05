@@ -1,5 +1,4 @@
 import { Prisma } from "@prisma/client";
-import { embedTexts, embeddingConfigured, toVectorLiteral } from "@/lib/company-leads/embed";
 import { prisma } from "@/lib/db";
 
 const CODE = /^\d{2,6}$/;
@@ -32,41 +31,6 @@ function ilikeWords(keywords: string[]): string[] {
 const COLUMNS = Prisma.sql`
   id, "businessName", domain, email, "sicName", "mailingCity" AS city, "mailingState" AS state
 `;
-
-async function vectorHits(keywords: string[], take: number): Promise<CompanyLeadHit[]> {
-  if (!embeddingConfigured() || keywords.length === 0 || take <= 0) return [];
-  const ready = await prisma.$queryRaw<Array<{ ok: number }>>`
-    SELECT 1 AS ok FROM company_lead_vectors LIMIT 1
-  `;
-  if (ready.length === 0) return [];
-  const vectors = await embedTexts([keywords.slice(0, 12).join(" ")]);
-  const query = vectors?.[0];
-  if (!query) return [];
-  const literal = toVectorLiteral(query);
-  return prisma.$queryRaw<CompanyLeadHit[]>`
-    SELECT
-      company.id,
-      company."businessName",
-      company.domain,
-      company.email,
-      company."sicName",
-      company.city,
-      company.state
-    FROM (
-      SELECT domain
-      FROM company_lead_vectors
-      ORDER BY embedding <=> ${literal}::vector
-      LIMIT ${take}
-    ) nearest
-    JOIN LATERAL (
-      SELECT ${COLUMNS}
-      FROM company_leads
-      WHERE lower(domain) = nearest.domain
-      ORDER BY id
-      LIMIT 1
-    ) company ON true
-  `;
-}
 
 async function sicPrefixHits(pattern: string, take: number): Promise<CompanyLeadHit[]> {
   return prisma.$queryRaw<CompanyLeadHit[]>`
@@ -133,14 +97,6 @@ export async function searchCompanyLeads(input: {
   const seenIds = new Set<string>(exclude);
   const seenDomains = new Set<string>();
   const hits: CompanyLeadHit[] = [];
-
-  try {
-    const semantic = await vectorHits(input.keywords, input.limit);
-    hits.push(...dedupe(semantic, input.limit, seenIds, seenDomains));
-    if (hits.length >= input.limit) return hits.slice(0, input.limit);
-  } catch (error) {
-    console.error("[company-leads] vector search skipped", error);
-  }
 
   const branches = [
     ...sic.map((pattern) => sicPrefixHits(pattern, perPrefix)),
