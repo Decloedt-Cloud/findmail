@@ -15,18 +15,15 @@ export async function GET(request: Request) {
       limit: url.searchParams.get("limit") ?? undefined,
     });
 
-    const where = { domain: { not: null } };
-    const total = await prisma.companyLead.count({ where });
     const window = Math.max(input.limit * 8, 64);
-    const skip = total > window ? Math.floor(Math.random() * (total - window)) : 0;
-
-    const rows = await prisma.companyLead.findMany({
-      where,
-      skip,
-      take: window,
-      orderBy: { id: "asc" },
-      select: { businessName: true, sicName: true, domain: true },
-    });
+    const rows = await prisma.$queryRaw<
+      Array<{ businessName: string; sicName: string | null; domain: string | null }>
+    >`
+      SELECT "businessName", "sicName", domain
+      FROM company_leads TABLESAMPLE SYSTEM (0.2)
+      WHERE domain IS NOT NULL
+      LIMIT ${window}
+    `;
 
     // Shuffle then keep unique domains up to limit.
     for (let i = rows.length - 1; i > 0; i -= 1) {

@@ -14,7 +14,16 @@ export type CompanyLeadHit = {
 };
 
 function likePrefixes(prefixes: string[]): string[] {
-  return [...new Set(prefixes.filter((prefix) => CODE.test(prefix)).map((prefix) => `${prefix}%`))].slice(0, 12);
+  const unique = [...new Set(prefixes.filter((prefix) => CODE.test(prefix)))].sort(
+    (a, b) => a.length - b.length || a.localeCompare(b),
+  );
+  const kept: string[] = [];
+  for (const prefix of unique) {
+    if (kept.some((shorter) => prefix.startsWith(shorter))) continue;
+    kept.push(prefix);
+    if (kept.length >= 8) break;
+  }
+  return kept.map((prefix) => `${prefix}%`);
 }
 
 function ilikeWords(keywords: string[]): string[] {
@@ -98,15 +107,15 @@ export async function searchCompanyLeads(input: {
   const seenDomains = new Set<string>();
   const hits: CompanyLeadHit[] = [];
 
-  const branches = [
-    ...sic.map((pattern) => sicPrefixHits(pattern, perPrefix)),
-    ...naics.map((pattern) => naicsPrefixHits(pattern, perPrefix)),
+  const scans: Array<[string[], (pattern: string, take: number) => Promise<CompanyLeadHit[]>]> = [
+    [sic, sicPrefixHits],
+    [naics, naicsPrefixHits],
   ];
-  if (branches.length) {
-    const batches = await Promise.all(branches);
-    for (const batch of batches) {
-      hits.push(...dedupe(batch, input.limit - hits.length, seenIds, seenDomains));
+  for (const [patterns, query] of scans) {
+    for (const pattern of patterns) {
       if (hits.length >= input.limit) return hits.slice(0, input.limit);
+      const batch = await query(pattern, perPrefix);
+      hits.push(...dedupe(batch, input.limit - hits.length, seenIds, seenDomains));
     }
   }
 
