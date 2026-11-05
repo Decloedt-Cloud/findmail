@@ -46,7 +46,6 @@ async function sicPrefixHits(pattern: string, take: number): Promise<CompanyLead
     SELECT ${COLUMNS}
     FROM company_leads
     WHERE "sicCode" LIKE ${pattern}
-    ORDER BY "sicCode", id
     LIMIT ${take}
   `;
 }
@@ -56,7 +55,6 @@ async function naicsPrefixHits(pattern: string, take: number): Promise<CompanyLe
     SELECT ${COLUMNS}
     FROM company_leads
     WHERE "naicsCode" LIKE ${pattern}
-    ORDER BY "naicsCode", id
     LIMIT ${take}
   `;
 }
