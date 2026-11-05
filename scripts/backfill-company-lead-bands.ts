@@ -27,8 +27,55 @@ import { employeeBand, parseSizeValue, revenueBand } from "../lib/company-leads/
 /** Raw values are few and repeat; the report never dumps thousands of lines. */
 const UNPARSED_SAMPLE = 20;
 
-/** 500 pairs × 4 columns = 2 000 bind parameters, well under Postgres' 65 535. */
-const PAIRS_PER_STATEMENT = 500;
+/**
+ * Pairs per statement. Each pair averages ~1 400 rows here, so 150 pairs is a
+ * ~200k-row transaction: small enough to keep WAL and lock volume sane on a
+ * 4.8M-row table, large enough that the hash join is not dominated by setup.
+ * Override with `--batch=…`.
+ */
+const DEFAULT_PAIRS_PER_STATEMENT = 150;
+
+/** Postgres SQLSTATEs that are infrastructure problems, not data problems. */
+const INFRA_ERRORS: Record<string, { label: string; advice: string }> = {
+  XX002: {
+    label: "index corruption",
+    advice:
+      "An index on company_leads is damaged: Postgres refuses to write through it. " +
+      "This is a storage/infrastructure fault, not a bug in this script. " +
+      "Run `npm run db:check-indexes` to list the damaged ones, rebuild them with " +
+      "REINDEX INDEX CONCURRENTLY, and check the disk (dmesg) before re-running.",
+  },
+  "53100": {
+    label: "disk full",
+    advice:
+      "Postgres ran out of space. A table-wide update roughly doubles the table and index " +
+      "footprint until VACUUM runs. Free space, then re-run — completed batches are kept.",
+  },
+  "57P01": {
+    label: "server shutting down",
+    advice: "The connection was terminated. Re-run once Postgres is back up.",
+  },
+  "57014": {
+    label: "statement cancelled",
+    advice: "The statement was cancelled (timeout or manual). Re-run; completed batches are kept.",
+  },
+};
+
+function errorCodeOf(error: unknown): string | null {
+  const meta = (error as { meta?: { code?: unknown } })?.meta;
+  const code = typeof meta?.code === 'string' ? meta.code : null;
+  return code;
+}
+
+function batchArg(fallback: number): number {
+  const hit = process.argv.find((a) => a.startsWith('--batch='));
+  if (!hit) return fallback;
+  const n = Number(hit.slice('--batch='.length));
+  if (!Number.isInteger(n) || n < 1 || n > 2_000) {
+    throw new Error('--batch must be an integer between 1 and 2000');
+  }
+  return n;
+}
 
 function hasFlag(flag: string): boolean {
   return process.argv.includes(flag);
@@ -148,7 +195,7 @@ async function main() {
     );
   }
 
-  const batches = chunks(toWrite, PAIRS_PER_STATEMENT);
+  const batches = chunks(toWrite, batchArg(DEFAULT_PAIRS_PER_STATEMENT));
 
   if (dryRun) {
     console.log("Dry run — nothing written.", {
@@ -166,12 +213,39 @@ async function main() {
   for (let i = 0; i < batches.length; i += 1) {
     const batch = batches[i]!;
     const batchStart = Date.now();
-    // Idempotent: the WHERE clause skips rows already carrying these bands.
-    const count = await prisma.$executeRaw(updateStatement(batch));
+    let count: number;
+    try {
+      // Idempotent: the WHERE clause skips rows already carrying these bands,
+      // so an interrupted run resumes by simply running it again.
+      count = await prisma.$executeRaw(updateStatement(batch));
+    } catch (error) {
+      const code = errorCodeOf(error);
+      const known = code ? INFRA_ERRORS[code] : undefined;
+      const batchesDone = i;
+      console.error(
+        `\nBackfill stopped at batch ${i + 1}/${batches.length}${code ? ` (SQLSTATE ${code})` : ""}.`,
+      );
+      if (known) {
+        console.error(`Cause: ${known.label}. ${known.advice}`);
+      } else {
+        console.error(error);
+      }
+      console.error(
+        `Committed so far: ${batchesDone} batch(es), ${touchedRows} rows. ` +
+          "Nothing after this point was written; the table is consistent.",
+      );
+      await prisma.$disconnect().catch(() => {});
+      process.exit(2);
+    }
+
     touchedRows += count;
-    const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
+    const seconds = (Date.now() - startedAt) / 1000;
+    const percent = Math.round(((i + 1) / batches.length) * 100);
+    const rate = seconds > 0 ? Math.round(touchedRows / seconds) : 0;
     console.log(
-      `  batch ${i + 1}/${batches.length} pairs=${batch.length} rows=${count} total=${touchedRows} elapsed=${elapsed}s (${((Date.now() - batchStart) / 1000).toFixed(1)}s)`,
+      `  batch ${i + 1}/${batches.length} (${percent}%) pairs=${batch.length} rows=${count} ` +
+        `total=${touchedRows} ${((Date.now() - batchStart) / 1000).toFixed(1)}s ` +
+        `elapsed=${seconds.toFixed(0)}s rate=${rate}/s`,
     );
   }
 
@@ -181,11 +255,20 @@ async function main() {
     statements: batches.length,
     seconds: Math.round((Date.now() - startedAt) / 1000),
   });
-  console.log("Reclaimed space: docker compose exec postgres psql -U findmail -d findmail -c 'VACUUM (ANALYZE) company_leads;'");
+  console.log(
+    "Reclaim the dead tuples (does not lock the table):\n" +
+      "  docker compose exec postgres psql -U findmail -d findmail -c 'VACUUM (ANALYZE) company_leads;'",
+  );
   await prisma.$disconnect();
 }
 
 main().catch((error) => {
-  console.error(error);
+  const code = errorCodeOf(error);
+  const known = code ? INFRA_ERRORS[code] : undefined;
+  if (known) {
+    console.error(`Backfill failed (SQLSTATE ${code}): ${known.label}. ${known.advice}`);
+  } else {
+    console.error(error);
+  }
   process.exit(1);
 });
