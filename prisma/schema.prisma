@@ -497,3 +497,12 @@ model CompanyLead {
   @@index([importBatchId])
   @@map("company_leads")
 }
+
+/// One embedding per company domain. Contacts stay in company_leads.
+model CompanyLeadVector {
+  domain    String                        @id
+  sicName   String?                       @map("sic_name")
+  embedding Unsupported("vector(512)")
+
+  @@map("company_lead_vectors")
+}
