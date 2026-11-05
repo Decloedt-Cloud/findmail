@@ -136,13 +136,28 @@ async function main() {
       console.log("The indexes are structurally sound; look at the storage layer (dmesg, SMART).");
     }
   } else {
-    console.log(`${broken.length} index(es) failed ${checkFn}. Rebuild each one:\n`);
-    for (const name of broken) console.log(`  ${rebuildCommand(name)}`);
+    console.log(`${broken.length} index(es) failed ${checkFn}.\n`);
+
+    if (broken.length === 1) {
+      console.log(`Rebuild it:\n\n  ${rebuildCommand(broken[0]!)}\n`);
+    } else {
+      // One table-wide command beats N index rebuilds: same result, one pass over
+      // the table, and no chance of re-running before the last index is fixed.
+      console.log("Rebuild them all in one pass — the shorter route when several are broken:\n");
+      console.log("  REINDEX TABLE CONCURRENTLY company_leads;   -- keeps the app serving");
+      console.log("  REINDEX (VERBOSE) TABLE company_leads;      -- faster, blocks writes\n");
+      console.log("Or individually:\n");
+      for (const name of broken) console.log(`  ${rebuildCommand(name)}`);
+      console.log("");
+    }
+
     console.log(
-      "\nCONCURRENTLY does not lock out writes. It needs free space for a second copy",
-      "of the index, and it leaves an INVALID index behind if it fails (DROP it, re-run).",
+      "CONCURRENTLY does not lock out writes. It needs free space for a second copy",
+      "of one index at a time, and it leaves an INVALID index behind if it fails",
+      "(DROP it, re-run). A UNIQUE index also fails here if the heap holds real",
+      "duplicates — check before rebuilding an *_key index.",
     );
-    console.log("Then: npm run db:backfill-bands");
+    console.log("\nThen: npm run db:check-indexes, then npm run db:backfill-bands");
   }
 
   await prisma.$disconnect();
