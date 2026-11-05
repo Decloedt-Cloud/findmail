@@ -84,8 +84,12 @@ export const wayoAdsCreatorQuerySchema = z.object({
 });
 
 /** Wayo Ads creator→brand company lead prefilter. */
+const codePrefix = z.string().trim().regex(/^\d{2,6}$/);
+
 export const wayoAdsCompanyLeadSearchSchema = z.object({
   keywords: z.array(z.string().trim().min(1).max(80)).max(20).default([]),
+  sicPrefixes: z.array(codePrefix).max(24).optional().default([]),
+  naicsPrefixes: z.array(codePrefix).max(24).optional().default([]),
   limit: z.number().int().min(1).max(200).optional().default(120),
   excludeIds: z.array(z.string().trim().min(1).max(80)).max(200).optional().default([]),
 });
