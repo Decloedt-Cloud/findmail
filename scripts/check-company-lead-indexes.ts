@@ -1,19 +1,28 @@
 /**
  * Check every btree index on company_leads for physical corruption.
  *
- * `amcheck`'s `bt_index_parent_check` walks the index and verifies that each
- * entry points at a real heap tuple. A corrupt index makes Postgres abort any
- * write that has to insert into it (SQLSTATE XX002), which is what stopped the
- * band backfill — so this has to be answered before writing again.
+ * A corrupt index makes Postgres abort any write that has to insert into it
+ * (SQLSTATE XX002) — that is what stopped the band backfill. This answers
+ * "which index is broken?" before writing again.
  *
- *   npx tsx scripts/check-company-lead-indexes.ts
+ *   npx tsx scripts/check-company-lead-indexes.ts          # bt_index_check, app stays up
+ *   npx tsx scripts/check-company-lead-indexes.ts --full   # bt_index_parent_check, blocks writes
  *
- * Read-only. No locks beyond a shared lock per index, so the app keeps serving.
+ * The two amcheck functions are not interchangeable:
+ *   - `bt_index_check` takes a lock on the index only and never blocks writes.
+ *     It catches the common cases (bad tuple, wrong heap reference).
+ *   - `bt_index_parent_check` also verifies the tree's internal structure
+ *     (downlinks, no cycles), but holds a ShareLock on the whole table for the
+ *     duration, so every INSERT/UPDATE/DELETE waits. Stop the app first.
  */
 
 import "../lib/load-env";
 
-type IndexRow = { relname: string };
+type IndexRow = { oid: string; relname: string };
+
+function hasFlag(flag: string): boolean {
+  return process.argv.includes(flag);
+}
 
 /** Prisma hides the useful text in `meta.message`; fall back to the error itself. */
 function describeError(error: unknown): string {
@@ -28,7 +37,8 @@ function sqlStateOf(error: unknown): string | null {
   return typeof meta?.code === 'string' ? meta.code : null;
 }
 
-function label(name: string): string {
+/** Index names are case-sensitive, so the rebuild command must quote them. */
+function rebuildCommand(name: string): string {
   return `REINDEX INDEX CONCURRENTLY "${name}";`;
 }
 
@@ -37,8 +47,12 @@ async function main() {
 
   await prisma.$executeRawUnsafe("CREATE EXTENSION IF NOT EXISTS amcheck");
 
+  // Index names like `company_leads_businessName_idx` carry capitals: a text
+  // value cast to `regclass` is folded to lowercase, so `$1::regclass` resolves
+  // `...businessname_idx` and fails with 42P01. Addressing each index by OID
+  // sidesteps the naming rules entirely.
   const indexes = await prisma.$queryRawUnsafe<IndexRow[]>(
-    `SELECT c.relname
+    `SELECT c.oid::text AS oid, c.relname
        FROM pg_class c
        JOIN pg_index i ON i.indexrelid = c.oid
       WHERE i.indrelid = to_regclass('company_leads')
@@ -53,21 +67,46 @@ async function main() {
     return;
   }
 
-  console.log(`Checking ${indexes.length} btree index(es) on company_leads…\n`);
+  const full = hasFlag("--full");
+  const checkFn = full ? "bt_index_parent_check" : "bt_index_check";
+
+  const [db] = await prisma.$queryRawUnsafe<{ name: string; version: string }[]>(
+    "SELECT current_database() AS name, current_setting('server_version') AS version",
+  );
+  const [size] = await prisma.$queryRawUnsafe<{ rows: bigint; bytes: bigint }[]>(
+    `SELECT (SELECT count(*) FROM company_leads) AS rows,
+            pg_total_relation_size('company_leads') AS bytes`,
+  );
+
+  console.log(`Database ${db?.name} (PostgreSQL ${db?.version}), company_leads:`);
+  console.log(
+    `  ${Number(size?.rows ?? 0).toLocaleString("en-US")} rows, ` +
+      `${(Number(size?.bytes ?? 0) / 1024 ** 3).toFixed(2)} GiB total (heap + indexes)`,
+  );
+  console.log(`\nChecking ${indexes.length} btree index(es) with ${checkFn}…`);
+  if (full) {
+    console.log(
+      "  WARNING: --full holds a ShareLock on company_leads — writes are blocked until it ends.\n",
+    );
+  } else {
+    console.log("  Read-only, does not block the app. Use --full to also verify tree structure.\n");
+  }
 
   const broken: string[] = [];
+  const skipped: string[] = [];
 
   for (const index of indexes) {
     const startedAt = Date.now();
     let error: string | null = null;
     try {
-      await prisma.$executeRawUnsafe(`SELECT bt_index_parent_check($1::regclass, true, true)`, index.relname);
+      await prisma.$executeRawUnsafe(`SELECT ${checkFn}($1::oid, true, true)`, index.oid);
     } catch (err) {
       // amcheck raises its own error on corruption; that is the signal, not a crash.
-      if (sqlStateOf(err) === '42P01') {
-        console.log("Table company_leads disappeared mid-check.");
-        await prisma.$disconnect();
-        return;
+      if (sqlStateOf(err) === "42P01") {
+        // The index was dropped between the catalogue read and the check.
+        skipped.push(index.relname);
+        console.log(`SKIP  ${index.relname}  (dropped during the check)`);
+        continue;
       }
       error = describeError(err);
     }
@@ -81,17 +120,34 @@ async function main() {
     }
   }
 
+  const checked = indexes.length - skipped.length;
+
   console.log("");
   if (broken.length === 0) {
-    console.log("All indexes are healthy. A XX002 was either transient storage trouble,");
-    console.log("already rebuilt, or a different index — check dmesg for I/O errors.");
+    console.log(`All ${checked} checked index(es) passed ${checkFn}.`);
+    if (!full) {
+      console.log(
+        "Amcheck's structural checks only run with --full. If XX002 keeps happening while",
+        "every index reports OK here, re-run with --full (app stopped) or rebuild the",
+        "index named in the error — it may be structurally broken in a way only the",
+        "parent check sees.",
+      );
+    } else {
+      console.log("The indexes are structurally sound; look at the storage layer (dmesg, SMART).");
+    }
   } else {
-    console.log(`${broken.length} corrupt index(es). Rebuild each one (no exclusive lock):\n`);
-    for (const name of broken) console.log(`  ${label(name)}`);
-    console.log("\nThen re-run: npm run db:backfill-bands");
+    console.log(`${broken.length} index(es) failed ${checkFn}. Rebuild each one:\n`);
+    for (const name of broken) console.log(`  ${rebuildCommand(name)}`);
+    console.log(
+      "\nCONCURRENTLY does not lock out writes. It needs free space for a second copy",
+      "of the index, and it leaves an INVALID index behind if it fails (DROP it, re-run).",
+    );
+    console.log("Then: npm run db:backfill-bands");
   }
 
   await prisma.$disconnect();
+  // Non-zero on corruption so a deploy step can gate on it.
+  if (broken.length > 0) process.exitCode = 3;
 }
 
 main().catch((error) => {
