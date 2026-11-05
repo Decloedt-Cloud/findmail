@@ -83,6 +83,22 @@ export const wayoAdsCreatorQuerySchema = z.object({
   q: z.string().trim().min(1).max(200).optional(),
 });
 
+/** Wayo Ads creator→brand company lead prefilter. */
+export const wayoAdsCompanyLeadSearchSchema = z.object({
+  keywords: z.array(z.string().trim().min(1).max(80)).max(20).default([]),
+  limit: z.number().int().min(1).max(200).optional().default(120),
+  excludeIds: z.array(z.string().trim().min(1).max(80)).max(200).optional().default([]),
+});
+
+export const wayoAdsCompanyLeadSampleQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).default(48),
+});
+
+export const wayoAdsCompanyLeadByIdsSchema = z.object({
+  ids: z.array(z.string().trim().min(1).max(80)).min(1).max(200),
+});
+
+
 export const creatorQuerySchema = z.object({
   q: z.string().trim().max(200).optional(),
   country: z.string().trim().max(8).optional(),

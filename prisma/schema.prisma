@@ -456,3 +456,44 @@ model AppSetting {
   value     String
   updatedAt DateTime @updatedAt
 }
+
+/// US B2B company contact for creator→brand outreach (Wayo Ads matching).
+/// Imported from CSV dumps; not a Findmail user account.
+model CompanyLead {
+  id              String   @id @default(cuid())
+  businessName    String
+  websiteUrl      String?
+  /// Hostname without www, lowercased — primary company key for prefilter.
+  domain          String?
+  email           String
+  /// Lowercased trimmed email — unique.
+  emailNormalized String   @unique
+  firstName       String?
+  lastName        String?
+  title           String?
+  phone           String?
+  mailingAddress  String?
+  mailingCity     String?
+  mailingState    String?
+  mailingZip      String?
+  countryCode     String   @default("US")
+  sicCode         String?
+  sicName         String?
+  naicsCode       String?
+  salesVolume     String?
+  employeeCount   String?
+  companyType     String?
+  sourceFile      String
+  importBatchId   String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([domain])
+  @@index([naicsCode])
+  @@index([sicCode])
+  @@index([sicName])
+  @@index([mailingState])
+  @@index([businessName])
+  @@index([importBatchId])
+  @@map("company_leads")
+}
