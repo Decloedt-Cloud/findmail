@@ -22,6 +22,7 @@ export async function GET(request: Request) {
       SELECT "businessName", "sicName", domain
       FROM company_leads TABLESAMPLE SYSTEM (0.2)
       WHERE domain IS NOT NULL
+        AND ("employeeBand" IS NOT NULL OR "revenueBand" IS NOT NULL)
       LIMIT ${window}
     `;
 
