@@ -51,15 +51,15 @@ const COLUMNS = Prisma.sql`
  *
  * A company is as big as its larger dimension — headcount says whether a
  * marketing team exists, revenue says whether they can fund a collaboration.
- * Rows with no parseable size at all are never excluded: "unknown" is not "small".
+ * Rows with no parseable size at all cannot be placed in a channel's window,
+ * so they never reach a proposal.
  */
 function bandFilter(bands: number[]): Prisma.Sql {
   const valid = [...new Set(bands.filter((b) => Number.isInteger(b) && b >= 0 && b <= 3))].sort();
-  if (valid.length === 0 || valid.length === 4) return Prisma.empty;
-  return Prisma.sql`AND (
-    ("employeeBand" IS NULL AND "revenueBand" IS NULL)
-    OR GREATEST(COALESCE("employeeBand", 0), COALESCE("revenueBand", 0)) = ANY(${valid}::int[])
-  )`;
+  const sized = Prisma.sql`("employeeBand" IS NOT NULL OR "revenueBand" IS NOT NULL)`;
+  if (valid.length === 0 || valid.length === 4) return Prisma.sql`AND ${sized}`;
+  return Prisma.sql`AND ${sized}
+    AND GREATEST(COALESCE("employeeBand", 0), COALESCE("revenueBand", 0)) = ANY(${valid}::int[])`;
 }
 
 async function sicPrefixHits(pattern: string, take: number, bands: number[]): Promise<CompanyLeadHit[]> {

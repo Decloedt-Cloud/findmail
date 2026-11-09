@@ -7,7 +7,8 @@
  * cheap integer instead of re-parsing 50k strings on every request.
  *
  * 0 = MICRO, 1 = MID, 2 = MACRO, 3 = MEGA. `null` means "not derivable" — such
- * rows are never excluded from a band filter, they simply score neutral.
+ * rows are dropped from every proposal: without a size there is no way to match
+ * them to a channel's reach.
  */
 
 /** Upper bound (inclusive) of each band; MEGA is open-ended. */

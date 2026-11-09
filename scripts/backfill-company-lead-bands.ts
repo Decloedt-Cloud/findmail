@@ -191,7 +191,7 @@ async function main() {
       console.log(`  ${row.rows} rows  ${row.label}`);
     }
     console.log(
-      "These rows keep a null band: never excluded from a band filter, scored neutral (62/100).",
+      "These rows keep a null band and are dropped from every match proposal",
     );
   }
 
