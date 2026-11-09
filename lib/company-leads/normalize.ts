@@ -1,4 +1,5 @@
 import { employeeBand, revenueBand } from "./bands";
+import { businessNameFromDomain } from "./companyName";
 
 export type RawCompanyLeadCsvRow = Record<string, string>;
 
@@ -80,10 +81,11 @@ export function normalizeCompanyLeadRow(row: RawCompanyLeadCsvRow): NormalizedCo
   const emailNormalized = normalizeCompanyLeadEmail(emailRaw);
   if (!emailNormalized) return null;
 
+  // The CSV has no name column on every dialect: fall back to a readable label
+  // from the email domain, never the hostname itself (`Acme`, not `acme.com`).
+  const companyName = clean(cell(row, "BUSINESS NAME", "Business Name", "COMPANY", "Company"), 240);
   const businessName =
-    clean(cell(row, "BUSINESS NAME", "Business Name", "COMPANY", "Company"), 240) ||
-    emailNormalized.split("@")[1] ||
-    "Unknown company";
+    companyName || businessNameFromDomain(emailNormalized.split("@")[1]) || "Unknown company";
 
   const web = normalizeCompanyLeadDomain(cell(row, "WEB ADDRESS", "Website", "WEBSITE", "URL"));
   const salesVolume = clean(cell(row, "SALES VOLUME"), 80);
