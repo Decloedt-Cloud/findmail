@@ -20,7 +20,23 @@ export const discoverySchema = z
     path: ["minSubscribers"],
   });
 
-const icpText = z.string().trim().max(500);
+/**
+ * DeepSeek writes longer ICP copy than a search needs. A field over the cap used
+ * to fail the entire request with a 400, losing the search over a sentence — so
+ * the text is clipped on arrival instead.
+ */
+const ICP_TEXT_MAX = 500;
+const ICP_LIST_MAX = 12;
+
+const icpText = z.string().trim().transform((value) => value.slice(0, ICP_TEXT_MAX));
+const icpName = z
+  .string()
+  .trim()
+  .min(1)
+  .transform((value) => value.slice(0, ICP_TEXT_MAX));
+const icpList = z
+  .array(icpText)
+  .transform((list) => list.slice(0, ICP_LIST_MAX));
 
 export const wayoAdsIcpSchema = z.object({
   onboardingId: z.string().trim().min(4).max(80),
@@ -49,13 +65,13 @@ export const wayoAdsIcpSchema = z.object({
       .array(
         z.object({
           icpRef: z.string().trim().min(1).max(80),
-          name: icpText.min(1),
+          name: icpName,
           description: icpText,
-          interests: z.array(icpText).max(12),
-          problems: z.array(icpText).max(12),
-          goals: z.array(icpText).max(12),
-          useCases: z.array(icpText).max(12),
-          productCategories: z.array(icpText).max(12),
+          interests: icpList,
+          problems: icpList,
+          goals: icpList,
+          useCases: icpList,
+          productCategories: icpList,
         }),
       )
       .min(1)
@@ -64,7 +80,7 @@ export const wayoAdsIcpSchema = z.object({
       .array(
         z.object({
           offerRef: z.string().trim().min(1).max(80),
-          name: icpText.min(1),
+          name: icpName,
           description: icpText,
           valueProposition: icpText.nullable(),
         }),
