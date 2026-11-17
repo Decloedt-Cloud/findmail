@@ -30,6 +30,11 @@ export const wayoAdsIcpSchema = z.object({
   requestId: z.string().trim().min(4).max(80).optional(),
   matchingText: z.string().trim().max(4000).optional(),
   maxChannels: z.number().int().min(1).max(50).optional(),
+  /**
+   * One more pass over the same request. The channels already proposed stay,
+   * and the run looks for `maxChannels` new ones behind them.
+   */
+  searchAgain: z.boolean().optional().default(false),
   countries: z.array(z.string().trim().regex(/^[A-Za-z]{2}$/)).max(60).optional(),
   request: z
     .object({

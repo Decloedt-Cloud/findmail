@@ -52,18 +52,32 @@ export async function runMatchIcpChannels(processingJobId: string) {
     const alreadyProposed = requestId
       ? await creatorsProposedOnOtherRequests(brand.wayoOnboardingId, brand.id, requestId)
       : { creatorIds: [] as string[], youtubeChannelIds: new Set<string>() };
-    const reused = await reuseStoredCreators({
+    /* A search again adds a batch behind the one this request already carries, so
+       those channels are not candidates for it: they were already proposed. */
+    const own = await prisma.icpChannelMatch.findMany({
+      where: { brandIcpId: brand.id },
+      select: { creatorId: true, creator: { select: { youtubeChannelId: true } } },
+    });
+    const linkedBefore = own.length;
+    const excludedCreatorIds = [...new Set([...alreadyProposed.creatorIds, ...own.map((link) => link.creatorId)])];
+    const skipChannelIds = new Set(alreadyProposed.youtubeChannelIds);
+    for (const link of own) {
+      if (link.creator.youtubeChannelId) skipChannelIds.add(link.creator.youtubeChannelId);
+    }
+    const linkedTotal = await reuseStoredCreators({
       brandIcpId: brand.id,
       brandName: brand.brandName,
       snapshot: brand.snapshot,
       searchQueries: analyzed.queries,
       limit: target,
       countries,
-      excludeCreatorIds: alreadyProposed.creatorIds,
+      excludeCreatorIds: excludedCreatorIds,
     });
+    // `reuseStoredCreators` answers with the row's total, not this run's share.
+    const reused = Math.max(0, linkedTotal - linkedBefore);
     const remaining = Math.max(0, target - reused);
     const found = remaining > 0
-      ? await findAudienceChannels(analyzed.queries, remaining, countries, alreadyProposed.youtubeChannelIds)
+      ? await findAudienceChannels(analyzed.queries, remaining, countries, skipChannelIds)
       : { channels: [], inspected: 0, quotaStopped: false };
     if (reused === 0 && found.channels.length === 0) {
       if (found.quotaStopped) {
@@ -82,7 +96,7 @@ export async function runMatchIcpChannels(processingJobId: string) {
       return;
     }
 
-    const blocked = new Set(alreadyProposed.creatorIds);
+    const blocked = new Set(excludedCreatorIds);
     const freshCreators = [];
     const createdCandidateIds: string[] = [];
     for (const channel of found.channels) {
@@ -219,18 +233,20 @@ function channelTarget(snapshot: unknown) {
   return CHANNEL_TARGET;
 }
 
-/** Empty match is a finished search, not a failed job. Wayo can re-queue later. */
+/** Empty match is a finished search, not a failed job. Wayo can re-queue later.
+ *  A search again that finds nothing keeps the batch already on the request. */
 async function completeMatchWithNoChannels(input: {
   brandId: string;
   processingJobId: string;
   inspected: number;
   note: string;
 }) {
+  const kept = await prisma.icpChannelMatch.count({ where: { brandIcpId: input.brandId } });
   await prisma.brandIcp.update({
     where: { id: input.brandId },
     data: {
       status: "COMPLETED",
-      matchedChannelCount: 0,
+      matchedChannelCount: kept,
       errorSummary: input.note.slice(0, 800),
     },
   });
@@ -241,7 +257,7 @@ async function completeMatchWithNoChannels(input: {
       progress: 100,
       totalRecords: input.inspected,
       processedRecords: input.inspected,
-      successCount: 0,
+      successCount: kept,
       errorSummary: input.note.slice(0, 800),
       completedAt: new Date(),
     },

@@ -14,7 +14,7 @@ function snapshotRequestId(snapshot: unknown) {
   return typeof id === "string" ? id : "";
 }
 
-function buildSnapshot(input: IcpInput, maxChannels: number) {
+function buildSnapshot(input: IcpInput, maxChannels: number, rounds: number) {
   return {
     kind: input.stage === "complex" ? ("complex" as const) : ("simplified" as const),
     language: "en" as const,
@@ -26,11 +26,22 @@ function buildSnapshot(input: IcpInput, maxChannels: number) {
   request: input.request ?? null,
   countries: (input.countries ?? []).map((code) => code.toUpperCase()),
   maxChannels,
+  /** How many `maxChannels`-sized batches this request has asked for. */
+  rounds,
     persistedAt: new Date().toISOString(),
   };
 }
 
-async function queueBrand(input: IcpInput, existingId: string | null, snapshot: ReturnType<typeof buildSnapshot>) {
+async function queueBrand(
+  input: IcpInput,
+  existingId: string | null,
+  snapshot: ReturnType<typeof buildSnapshot>,
+  /**
+   * A search again adds a batch behind the one already on the request. Its
+   * channels stay: they are the ones the advertiser has already been shown.
+   */
+  appendMatches = false,
+) {
   const job = await prisma.processingJob.create({
     data: {
       type: "MATCH_ICP_CHANNELS",
@@ -39,6 +50,10 @@ async function queueBrand(input: IcpInput, existingId: string | null, snapshot: 
       totalRecords: snapshot.maxChannels,
     },
   });
+  /* An appended round keeps the batch already on the request, so its count stays
+     true even if this run fails before it can report a new total. */
+  const keptCount =
+    existingId && appendMatches ? await prisma.icpChannelMatch.count({ where: { brandIcpId: existingId } }) : 0;
   const data = {
     websiteUrl: input.websiteUrl,
     brandName: input.brandName,
@@ -46,7 +61,7 @@ async function queueBrand(input: IcpInput, existingId: string | null, snapshot: 
     searchQueries: [] as string[],
     analysisNote: null,
     status: "QUEUED" as const,
-    matchedChannelCount: 0,
+    matchedChannelCount: keptCount,
     errorSummary: null,
     processingJobId: job.id,
   };
@@ -55,7 +70,7 @@ async function queueBrand(input: IcpInput, existingId: string | null, snapshot: 
     : await prisma.brandIcp.create({
         data: { wayoOnboardingId: input.onboardingId, ...data },
       });
-  if (existingId) {
+  if (existingId && !appendMatches) {
     await prisma.icpChannelMatch.deleteMany({ where: { brandIcpId: existingId } });
   }
   await prisma.processingJob.update({
@@ -88,6 +103,12 @@ function sameCountryList(stored: string[], requested: string[] | undefined) {
   return [...stored].sort().join(",") === next.join(",");
 }
 
+function snapshotRounds(snapshot: unknown) {
+  if (!snapshot || typeof snapshot !== "object") return 1;
+  const raw = Number((snapshot as { rounds?: unknown }).rounds);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 1;
+}
+
 function isHealthyIcp(row: { status: string; matchedChannelCount: number }) {
   return row.status === "QUEUED" || row.status === "RUNNING" || (row.status === "COMPLETED" && row.matchedChannelCount > 0);
 }
@@ -111,10 +132,19 @@ export async function acceptWayoIcp(input: IcpInput) {
 
   if (input.stage === "complex" && input.requestId) {
     const same = copies.find((row) => snapshotRequestId(row.snapshot) === input.requestId) ?? null;
+    if (input.searchAgain) {
+      /* One more batch on the same request. A run already in flight is not restarted:
+         it answers with its own status so the caller waits for it instead. */
+      if (same && (same.status === "QUEUED" || same.status === "RUNNING")) {
+        return { id: same.id, status: same.status, queued: false as const };
+      }
+      const rounds = same ? snapshotRounds(same.snapshot) + 1 : 1;
+      return queueBrand(input, same?.id ?? null, buildSnapshot(input, maxChannels, rounds), Boolean(same));
+    }
     if (same && isHealthyIcp(same) && sameCountryList(snapshotCountries(same.snapshot), input.countries)) {
       return { id: same.id, status: same.status, queued: false as const };
     }
-    return queueBrand(input, same?.id ?? null, buildSnapshot(input, maxChannels));
+    return queueBrand(input, same?.id ?? null, buildSnapshot(input, maxChannels, 1));
   }
 
   const simplified = copies.filter((row) => snapshotRequestId(row.snapshot) === "");
@@ -124,5 +154,5 @@ export async function acceptWayoIcp(input: IcpInput) {
     return { id: kept.id, status: kept.status, queued: false as const };
   }
 
-  return queueBrand(input, simplified[0]?.id ?? null, buildSnapshot(input, maxChannels));
+  return queueBrand(input, simplified[0]?.id ?? null, buildSnapshot(input, maxChannels, 1));
 }

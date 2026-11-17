@@ -38,6 +38,13 @@ function maxChannels(snapshot: unknown) {
   return 10;
 }
 
+/** How many batches this request has asked for. One before any search again. */
+function snapshotRounds(snapshot: unknown) {
+  if (!snapshot || typeof snapshot !== "object") return 1;
+  const raw = Number((snapshot as { rounds?: unknown }).rounds);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 1;
+}
+
 export async function listWayoIcpMatches(input: { onboardingId: string; requestId?: string; countries?: string }) {
   const rows = await prisma.brandIcp.findMany({
     where: { wayoOnboardingId: input.onboardingId },
@@ -50,7 +57,9 @@ export async function listWayoIcpMatches(input: { onboardingId: string; requestI
     return { id: null, status: "MISSING" as const, creators: [] };
   }
   const alreadyProposed = await creatorsProposedOnOtherRequests(rows, brand.id, input.requestId ?? "");
-  const limit = maxChannels(brand.snapshot);
+  /* Every batch this request asked for stays readable: the first search plus each
+     search again, up to a ceiling the screen can still scroll. */
+  const limit = Math.min(maxChannels(brand.snapshot) * snapshotRounds(brand.snapshot), 100);
   const countries = (input.countries || "")
     .split(",")
     .map((code) => code.trim().toUpperCase())
