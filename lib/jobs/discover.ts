@@ -8,10 +8,12 @@ import { hunterProviderFromEnv } from "@/lib/email/providers";
 import { saveDiscoveredChannel } from "@/lib/creators/store";
 import { isCancelled, markRunning, recordJobError, refreshJobCounts, updateProgress } from "@/lib/jobs/progress";
 import { MAX_CREATOR_SUBSCRIBERS } from "@/lib/constants";
+import { qualifiesForStorage } from "@/lib/youtube/qualify";
 import { YouTubeApiError, createYouTubeClient, matchesSearchCountry, matchesSubscriberRange } from "@/lib/youtube/client";
 import type { SocialProfiles } from "@/lib/youtube/contacts";
 import { discoverYouTubeChannels, topicTier, type DiscoveredChannel, type DiscoveryProgress } from "@/lib/youtube/discovery";
 import { reuseLimit } from "@/lib/youtube/terms";
+import { fillRunBudget, fillWindowStart, isFillPayload, paceYouTubeFetch } from "@/lib/jobs/fill-pool";
 
 async function recordQuota(searchJobId: string, units: number, operation: string, success: boolean, message?: string) {
   await prisma.apiUsage.create({
@@ -142,52 +144,71 @@ export async function runDiscoverCreators(jobId: string) {
           where: { provider: "youtube", createdAt: { gte: since } },
         });
         let consumed = used._sum.units ?? 0;
-        const client = createYouTubeClient(
-          fetch,
-          (units, operation, success, message) => {
-            consumed += units;
-            return recordQuota(search.id, units, operation, success, message);
-          },
-          (units) => {
-            if (consumed + units > daily) {
-              throw new YouTubeApiError("The daily YouTube quota budget would be exceeded by the next request.", "QUOTA");
-            }
-          },
-        );
-        const discovered = await discoverYouTubeChannels(
-          client,
-          {
-            keywords: search.keywords,
-            countries: search.countries,
-            language: search.language,
-            minSubscribers: search.minSubscribers,
-            maxSubscribers: Math.min(search.maxSubscribers ?? MAX_CREATOR_SUBSCRIBERS, MAX_CREATOR_SUBSCRIBERS),
-            maxResults: remaining,
-            recencyDays: search.recencyDays,
-            excludeChannelIds: reusedIds,
-          },
-          () => isCancelled(jobId),
-          {
-            onProgress: (progress) => publish({ ...progress, found: progress.found + reusedCount }),
-            onChannel: async (channel) => {
-              channels.push(channel);
-              await persistChannel(channel);
+        const fill = isFillPayload(payload);
+        const tonight = fill
+          ? await prisma.searchJob.aggregate({
+              _sum: { quotaUsed: true },
+              where: {
+                createdAt: { gte: fillWindowStart() },
+                processingJob: { is: { payload: { path: ["fill"], equals: true } } },
+              },
+            })
+          : null;
+        const runBudget = fill ? fillRunBudget(tonight?._sum.quotaUsed ?? 0, daily - consumed) : daily - consumed;
+        const ceiling = consumed + runBudget;
+        if (runBudget > 0) {
+          const client = createYouTubeClient(
+            fill ? paceYouTubeFetch(fetch) : fetch,
+            (units, operation, success, message) => {
+              consumed += units;
+              return recordQuota(search.id, units, operation, success, message);
             },
-          },
-        );
-        channels = discovered.channels;
-        duplicates += discovered.duplicates;
-        await prisma.processingJob.update({
-          where: { id: jobId },
-          data: { payload: { ...(payload as object), channels, phase: "saving" }, duplicatesPrevented: duplicates, totalRecords: channels.length + reusedCount },
-        });
+            (units) => {
+              const limit = fill ? ceiling : daily;
+              if (consumed + units > limit) {
+                throw new YouTubeApiError(
+                  fill && ceiling < daily
+                    ? "The nightly creator pool stopped at its unit cap."
+                    : "The daily YouTube quota budget would be exceeded by the next request.",
+                  "QUOTA",
+                );
+              }
+            },
+          );
+          const discovered = await discoverYouTubeChannels(
+            client,
+            {
+              keywords: search.keywords,
+              countries: search.countries,
+              language: search.language,
+              minSubscribers: search.minSubscribers,
+              maxSubscribers: Math.min(search.maxSubscribers ?? MAX_CREATOR_SUBSCRIBERS, MAX_CREATOR_SUBSCRIBERS),
+              maxResults: remaining,
+              recencyDays: search.recencyDays,
+              excludeChannelIds: reusedIds,
+            },
+            () => isCancelled(jobId),
+            {
+              onProgress: (progress) => publish({ ...progress, found: progress.found + reusedCount }),
+              onChannel: async (channel) => {
+                channels.push(channel);
+                await persistChannel(channel);
+              },
+            },
+          );
+          channels = discovered.channels;
+          duplicates += discovered.duplicates;
+          await prisma.processingJob.update({
+            where: { id: jobId },
+            data: { payload: { ...(payload as object), channels, phase: "saving" }, duplicatesPrevented: duplicates, totalRecords: channels.length + reusedCount },
+          });
+        }
       }
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "YouTube discovery failed";
     const partial = channels.length > 0 || reusedCount > 0 || (error instanceof YouTubeApiError && error.code === "QUOTA");
-    await recordJobError(jobId, message, undefined, error instanceof YouTubeApiError && error.code === "RETRYABLE");
-    if (error instanceof YouTubeApiError && error.code === "RETRYABLE") throw error;
+    await recordJobError(jobId, message, undefined, false);
     await prisma.searchJob.update({
       where: { id: search.id },
       data: { status: partial ? "PARTIALLY_COMPLETED" : "FAILED", errorSummary: message, completedAt: new Date() },
@@ -315,6 +336,8 @@ async function attachReusableCreators(
       discoveryRegion: true,
       subscriberCount: true,
       subscriberVisibility: true,
+      lastActiveAt: true,
+      averageViews: true,
     },
   });
   const limit = reuseLimit(search.maxResults);
@@ -331,6 +354,12 @@ async function attachReusableCreators(
     if (tier !== "strong") continue;
     if (!matchesSearchCountry(creator, search.countries)) continue;
     if (!matchesSubscriberRange(creator.subscriberVisibility, creator.subscriberCount, search.minSubscribers, Math.min(search.maxSubscribers ?? MAX_CREATOR_SUBSCRIBERS, MAX_CREATOR_SUBSCRIBERS))) continue;
+    if (!qualifiesForStorage({
+      lastActiveAt: creator.lastActiveAt,
+      subscriberCount: creator.subscriberCount,
+      subscriberVisibility: creator.subscriberVisibility,
+      averageViews: creator.averageViews,
+    })) continue;
     chosen.push(creator);
   }
   for (const creator of chosen) {

@@ -4,6 +4,34 @@ const STOP_WORDS = new Set([
   "à", "with", "pour", "sur", "dans", "in", "on", "to",
 ]);
 
+const QUERY_ALIASES: Record<string, string[]> = {
+  fashion: ["clothing"],
+  beauty: ["skincare", "makeup"],
+  skincare: ["makeup", "beauty"],
+  software: ["saas"],
+  food: ["cooking"],
+  wellness: ["health"],
+  fitness: ["workout"],
+  "home decor": ["interior"],
+  travel: ["tourism"],
+  finance: ["investing"],
+  fintech: ["neobank", "open banking"],
+  education: ["tutorial"],
+  gaming: ["gamer"],
+  cars: ["automotive"],
+  pets: ["animals"],
+  parenting: ["family"],
+  ecommerce: ["online store"],
+  nonprofit: ["charity"],
+  "real estate": ["property"],
+  crypto: ["blockchain"],
+  photography: ["photographer"],
+  music: ["musician"],
+  lifestyle: ["vlog"],
+  diy: ["crafts"],
+  sustainability: ["environment"],
+};
+
 const FR_QUERY_ALIASES: Record<string, string[]> = {
   business: ["entrepreneur", "entreprise", "entrepreneuriat"],
   entrepreneur: ["entreprise", "entrepreneuriat"],
@@ -16,6 +44,28 @@ const FR_QUERY_ALIASES: Record<string, string[]> = {
   makeup: ["beauté", "maquillage"],
   fitness: ["musculation"],
   workout: ["musculation"],
+  fintech: ["néobanque", "banque en ligne"],
+  fashion: ["mode"],
+  skincare: ["beauté"],
+  software: ["logiciel"],
+  wellness: ["santé"],
+  "home decor": ["décoration"],
+  travel: ["voyage"],
+  finance: ["bourse"],
+  education: ["éducation"],
+  entertainment: ["divertissement"],
+  gaming: ["jeu vidéo"],
+  cars: ["voiture"],
+  pets: ["animaux"],
+  parenting: ["parentalité"],
+  ecommerce: ["boutique en ligne"],
+  nonprofit: ["bénévolat"],
+  "real estate": ["immobilier"],
+  crypto: ["cryptomonnaie"],
+  photography: ["photographie"],
+  music: ["musique"],
+  diy: ["bricolage"],
+  sustainability: ["écologie"],
 };
 
 export function matchTerms(keyword: string) {
@@ -30,9 +80,13 @@ export function matchTerms(keyword: string) {
 
 export function searchQueries(keyword: string, country: string) {
   const queries = [...matchTerms(keyword)];
-  if (country.toUpperCase() !== "FR") return queries;
+  const french = country.toUpperCase() === "FR";
   for (const base of [...queries]) {
-    for (const alias of FR_QUERY_ALIASES[base.toLowerCase()] ?? []) {
+    const aliases = [
+      ...(QUERY_ALIASES[base.toLowerCase()] ?? []),
+      ...(french ? FR_QUERY_ALIASES[base.toLowerCase()] ?? [] : []),
+    ];
+    for (const alias of aliases) {
       if (!queries.some((query) => query.toLowerCase() === alias.toLowerCase())) queries.push(alias);
     }
   }

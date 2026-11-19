@@ -11,11 +11,11 @@ export const DISCOVERY_COUNTRY_CODES = [
 
 /**
  * Wayo campaign categories, without Other.
- * `query` is the one YouTube phrase used to find channels in that vertical.
+ * `query` is the primary YouTube phrase. Related wordings are added when the search runs.
  */
 export const DISCOVERY_NICHES = [
   { id: "FASHION_APPAREL", label: "Fashion & apparel", query: "fashion" },
-  { id: "BEAUTY_PERSONAL_CARE", label: "Beauty & personal care", query: "skincare" },
+  { id: "BEAUTY_PERSONAL_CARE", label: "Beauty & personal care", query: "beauty" },
   { id: "TECH_SOFTWARE_ELECTRONICS", label: "Tech, software & electronics", query: "software" },
   { id: "FOOD_BEVERAGE", label: "Food & beverage", query: "food" },
   { id: "HEALTH_WELLNESS", label: "Health & wellness", query: "wellness" },
@@ -23,6 +23,7 @@ export const DISCOVERY_NICHES = [
   { id: "HOME_LIVING", label: "Home & living", query: "home decor" },
   { id: "TRAVEL_HOSPITALITY", label: "Travel & hospitality", query: "travel" },
   { id: "FINANCE_INSURANCE", label: "Finance & insurance", query: "finance" },
+  { id: "FINTECH", label: "Fintech", query: "fintech" },
   { id: "EDUCATION_LEARNING", label: "Education & learning", query: "education" },
   { id: "ENTERTAINMENT_MEDIA", label: "Entertainment & media", query: "entertainment" },
   { id: "GAMING_ESPORTS", label: "Gaming & esports", query: "gaming" },

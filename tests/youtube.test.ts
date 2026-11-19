@@ -151,6 +151,215 @@ describe("youtube pagination and dedupe", () => {
     expect(result.channels.map((channel) => channel.id)).toEqual(["FRBIZ"]);
   });
 
+  it("keeps paging after a topical channel fails the activity check", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      const parsed = new URL(url);
+      if (parsed.pathname.endsWith("/search")) {
+        if (parsed.searchParams.get("q") !== "SaaS") return jsonResponse({ items: [] });
+        if (!parsed.searchParams.get("pageToken")) {
+          return jsonResponse({
+            nextPageToken: "p2",
+            items: [{ id: { channelId: "UCstale" }, snippet: { channelTitle: "SaaS Stale", description: "saas" } }],
+          });
+        }
+        return jsonResponse({
+          items: [{ id: { channelId: "UCfit" }, snippet: { channelTitle: "SaaS Fit", description: "saas" } }],
+        });
+      }
+      if (parsed.pathname.endsWith("/channels")) {
+        const id = parsed.searchParams.get("id");
+        const stale = id === "UCstale";
+        return jsonResponse({
+          items: [{
+            id,
+            snippet: { title: stale ? "SaaS Stale" : "SaaS Fit", description: "saas", country: "US" },
+            statistics: { subscriberCount: "10000", hiddenSubscriberCount: false },
+            contentDetails: { relatedPlaylists: { uploads: stale ? "UUstale" : "UUfit" } },
+          }],
+        });
+      }
+      if (parsed.pathname.endsWith("/playlistItems")) {
+        const stale = parsed.searchParams.get("playlistId") === "UUstale";
+        return jsonResponse({
+          items: [{
+            contentDetails: {
+              videoId: stale ? "old" : "recent",
+              videoPublishedAt: stale ? "2020-01-01T00:00:00.000Z" : RECENT_PUBLISHED,
+            },
+          }],
+        });
+      }
+      return jsonResponse({
+        items: [
+          { id: "old", snippet: { title: "Old", publishedAt: "2020-01-01T00:00:00.000Z", liveBroadcastContent: "none" }, statistics: { viewCount: "9000" }, status: { privacyStatus: "public" } },
+          { id: "recent", snippet: { title: "Recent", publishedAt: RECENT_PUBLISHED, liveBroadcastContent: "none" }, statistics: { viewCount: "5000" }, status: { privacyStatus: "public" } },
+        ],
+      });
+    });
+    const result = await discoverYouTubeChannels(new YouTubeClient("test-key", fetchImpl), {
+      keywords: ["SaaS"],
+      countries: ["US"],
+      maxResults: 1,
+    });
+    expect(result.channels.map((channel) => channel.id)).toEqual(["UCfit"]);
+  });
+
+  it("reads past the first three pages until one creator qualifies", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      const parsed = new URL(url);
+      if (parsed.pathname.endsWith("/search")) {
+        if (parsed.searchParams.get("type") === "video") return jsonResponse({ items: [] });
+        const token = parsed.searchParams.get("pageToken");
+        const page = token === "p2" ? 2 : token === "p3" ? 3 : token === "p4" ? 4 : 1;
+        const id = page === 4 ? "UCfit" : `UCstale${page}`;
+        return jsonResponse({
+          nextPageToken: page < 4 ? `p${page + 1}` : undefined,
+          items: [{ id: { channelId: id }, snippet: { channelTitle: id, description: "saas" } }],
+        });
+      }
+      if (parsed.pathname.endsWith("/channels")) {
+        const id = parsed.searchParams.get("id") ?? "";
+        const fit = id === "UCfit";
+        return jsonResponse({
+          items: [{
+            id,
+            snippet: { title: fit ? "SaaS Fit" : id, description: "saas", country: "US" },
+            statistics: { subscriberCount: "10000", hiddenSubscriberCount: false },
+            contentDetails: { relatedPlaylists: { uploads: fit ? "UUfit" : `UU${id}` } },
+          }],
+        });
+      }
+      if (parsed.pathname.endsWith("/playlistItems")) {
+        const fit = parsed.searchParams.get("playlistId") === "UUfit";
+        return jsonResponse({
+          items: [{
+            contentDetails: {
+              videoId: fit ? "recent" : "old",
+              videoPublishedAt: fit ? RECENT_PUBLISHED : "2020-01-01T00:00:00.000Z",
+            },
+          }],
+        });
+      }
+      return jsonResponse({
+        items: [
+          { id: "old", snippet: { title: "Old", publishedAt: "2020-01-01T00:00:00.000Z", liveBroadcastContent: "none" }, statistics: { viewCount: "9000" }, status: { privacyStatus: "public" } },
+          { id: "recent", snippet: { title: "Recent", publishedAt: RECENT_PUBLISHED, liveBroadcastContent: "none" }, statistics: { viewCount: "5000" }, status: { privacyStatus: "public" } },
+        ],
+      });
+    });
+    const result = await discoverYouTubeChannels(new YouTubeClient("test-key", fetchImpl), {
+      keywords: ["SaaS"],
+      countries: ["US"],
+      maxResults: 1,
+    });
+    expect(result.channels.map((channel) => channel.id)).toEqual(["UCfit"]);
+  });
+
+  it("stops a wording after two pages with no match and tries the next wording", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      const parsed = new URL(url);
+      if (parsed.pathname.endsWith("/playlistItems") || parsed.pathname.endsWith("/videos")) return recentActivity(parsed.pathname);
+      if (parsed.pathname.endsWith("/search")) {
+        const query = parsed.searchParams.get("q");
+        const token = parsed.searchParams.get("pageToken");
+        if (query === "fintech" && !token) {
+          return jsonResponse({
+            nextPageToken: "p2",
+            items: [{ id: { channelId: "UCmiss1" }, snippet: { channelTitle: "Cooking", description: "recipes" } }],
+          });
+        }
+        if (query === "fintech" && token === "p2") {
+          return jsonResponse({
+            nextPageToken: "p3",
+            items: [{ id: { channelId: "UCmiss2" }, snippet: { channelTitle: "Travel", description: "voyages" } }],
+          });
+        }
+        if (query === "neobank") {
+          return jsonResponse({
+            items: [{ id: { channelId: "UCneo" }, snippet: { channelTitle: "Neobank Daily", description: "fintech" } }],
+          });
+        }
+        return jsonResponse({ items: [] });
+      }
+      const id = parsed.searchParams.get("id");
+      if (id === "UCneo") {
+        return jsonResponse({
+          items: [{
+            id: "UCneo",
+            snippet: { title: "Neobank Daily", description: "A fintech neobank", country: "US" },
+            statistics: { subscriberCount: "20000", hiddenSubscriberCount: false },
+            contentDetails: { relatedPlaylists: { uploads: "UUneo" } },
+          }],
+        });
+      }
+      return jsonResponse({
+        items: [{
+          id,
+          snippet: { title: "Other", description: "Unrelated", country: "US" },
+          statistics: { subscriberCount: "20000", hiddenSubscriberCount: false },
+        }],
+      });
+    });
+    const result = await discoverYouTubeChannels(new YouTubeClient("test-key", fetchImpl), {
+      keywords: ["fintech"],
+      countries: ["US"],
+      maxResults: 1,
+    });
+    expect(result.channels.map((channel) => channel.id)).toEqual(["UCneo"]);
+    const fintechPages = fetchImpl.mock.calls
+      .map((call) => new URL(String(call[0])))
+      .filter((url) => url.pathname.endsWith("/search") && url.searchParams.get("q") === "fintech");
+    expect(fintechPages.map((url) => url.searchParams.get("pageToken"))).toEqual([null, "p2", null, "p2"]);
+  });
+
+  it("keeps reading when on-topic channels are outside the subscriber band", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      const parsed = new URL(url);
+      if (parsed.pathname.endsWith("/playlistItems") || parsed.pathname.endsWith("/videos")) return recentActivity(parsed.pathname);
+      if (parsed.pathname.endsWith("/search")) {
+        if (parsed.searchParams.get("q") !== "skincare") return jsonResponse({ items: [] });
+        const token = parsed.searchParams.get("pageToken");
+        if (!token) {
+          return jsonResponse({
+            nextPageToken: "p2",
+            items: [{ id: { channelId: "UCbig" }, snippet: { channelTitle: "Skincare Giant", description: "skincare" } }],
+          });
+        }
+        if (token === "p2") {
+          return jsonResponse({
+            nextPageToken: "p3",
+            items: [{ id: { channelId: "UCbig2" }, snippet: { channelTitle: "Makeup Giant", description: "makeup" } }],
+          });
+        }
+        return jsonResponse({
+          items: [{ id: { channelId: "UCmid" }, snippet: { channelTitle: "Skincare Diary", description: "skincare routine" } }],
+        });
+      }
+      const id = parsed.searchParams.get("id");
+      const mid = id === "UCmid";
+      return jsonResponse({
+        items: [{
+          id,
+          snippet: {
+            title: mid ? "Skincare Diary" : "Skincare Giant",
+            description: mid ? "Daily skincare" : "skincare",
+            country: "US",
+          },
+          statistics: { subscriberCount: mid ? "50000" : "500000", hiddenSubscriberCount: false },
+          contentDetails: { relatedPlaylists: { uploads: mid ? "UUmid" : "UUbig" } },
+        }],
+      });
+    });
+    const result = await discoverYouTubeChannels(new YouTubeClient("test-key", fetchImpl), {
+      keywords: ["skincare"],
+      countries: ["US"],
+      maxResults: 1,
+      minSubscribers: 20_000,
+      maxSubscribers: 100_000,
+    });
+    expect(result.channels.map((channel) => channel.id)).toEqual(["UCmid"]);
+  });
+
   it("stops at the requested creator count even when no email is written", async () => {
     const fetchImpl = vi.fn(async (url: string) => {
       const parsed = new URL(url);
@@ -335,10 +544,11 @@ describe("youtube credentials and quota", () => {
   });
 
   it("estimates an upper-bound search cost from the discovery loops", () => {
-    // 1 term × 2 passes × 3 pages × 100 + same channel lists + enrich inspectLimit(10)=50
-    expect(estimateSearchQuota({ keywordCount: 1, countryCount: 1, maxResults: 10, includeRecentVideos: false })).toBe(677);
-    expect(estimateSearchQuota({ keywordCount: 1, countryCount: 1, maxResults: 50, includeRecentVideos: false })).toBe(890);
-    // FR expands "Business" into 4 search terms
+    // 1 term × 2 passes × 8 pages × 100 + channel lists + enrich inspectLimit(10)=80
+    expect(estimateSearchQuota({ keywordCount: 1, countryCount: 1, maxResults: 10, includeRecentVideos: false })).toBe(1730);
+    // inspectLimit(50)=300
+    expect(estimateSearchQuota({ keywordCount: 1, countryCount: 1, maxResults: 50, includeRecentVideos: false })).toBe(2042);
+    // FR "Business" is 4 wordings: the first can use 8 pages, the other three stop at 2
     expect(estimateSearchQuota({
       keywordCount: 1,
       countryCount: 1,
@@ -346,7 +556,7 @@ describe("youtube credentials and quota", () => {
       includeRecentVideos: false,
       keywords: ["Business"],
       countries: ["FR"],
-    })).toBe(2495);
+    })).toBe(2942);
   });
 
   it("splits filler words and caps stored creators at half the request", () => {
@@ -354,6 +564,14 @@ describe("youtube credentials and quota", () => {
     expect(matchTerms("artificial intelligence")).toEqual(["artificial intelligence"]);
     expect(searchQueries("Business", "FR")).toEqual(["Business", "entrepreneur", "entreprise", "entrepreneuriat"]);
     expect(searchQueries("Business", "US")).toEqual(["Business"]);
+    expect(searchQueries("fintech", "US")).toEqual(["fintech", "neobank", "open banking"]);
+    expect(searchQueries("fintech", "FR")).toEqual(["fintech", "neobank", "open banking", "néobanque", "banque en ligne"]);
+    expect(searchQueries("fashion", "US")).toEqual(["fashion", "clothing"]);
+    expect(searchQueries("fashion", "FR")).toEqual(["fashion", "clothing", "mode"]);
+    expect(searchQueries("beauty", "US")).toEqual(["beauty", "skincare", "makeup"]);
+    expect(searchQueries("beauty", "FR")).toEqual(["beauty", "skincare", "makeup", "beauté", "maquillage"]);
+    expect(searchQueries("skincare", "US")).toEqual(["skincare", "makeup", "beauty"]);
+    expect(searchQueries("skincare", "FR")).toEqual(["skincare", "makeup", "beauty", "beauté"]);
     expect(audienceFocus(5000, 20000)).toBe("small");
     expect(audienceFocus(20000, 100000)).toBe("mid");
     expect(audienceFocus(500000, null)).toBe("large");

@@ -12,6 +12,7 @@ import { audienceSearchPasses } from "@/lib/youtube/audience";
 import { matchTerms, searchQueries } from "@/lib/youtube/terms";
 import { AVERAGE_VIEWS_METHOD, fitViewCount, selectRecentPublicVideos } from "@/lib/youtube/metrics";
 import { MAX_CREATOR_SUBSCRIBERS } from "@/lib/constants";
+import { ALIAS_PAGES_PER_QUERY, EMPTY_PAGE_LIMIT, MAX_PAGES_PER_QUERY } from "@/lib/youtube/estimate";
 import { qualifiesForStorage } from "@/lib/youtube/qualify";
 import type { EmailCandidate } from "@/lib/email/discovery";
 
@@ -51,8 +52,6 @@ export type DiscoveredChannel = YouTubeChannel & {
   descriptionEmails: EmailCandidate[];
 };
 
-const MAX_PAGES_PER_QUERY = 3;
-
 export type DiscoveryProgress = {
   phase: "searching" | "reading" | "saving";
   scanned: number;
@@ -81,18 +80,44 @@ const TOPIC_ALIASES: Record<string, string[]> = {
   makeup: ["beauty", "beauté", "maquillage"],
   fitness: ["workout", "workouts", "gym", "musculation"],
   workout: ["fitness", "musculation"],
-  finance: ["investing", "investment", "investor"],
+  finance: ["investing", "investment", "investor", "bourse"],
   investing: ["finance"],
-  gaming: ["gamer", "gameplay"],
+  gaming: ["gamer", "gameplay", "jeu vidéo"],
   gamer: ["gaming"],
-  music: ["musician", "songwriter"],
+  music: ["musician", "songwriter", "musique"],
   musician: ["music"],
-  education: ["teacher", "tutorial"],
-  travel: ["traveler", "tourism"],
+  education: ["teacher", "tutorial", "éducation"],
+  travel: ["traveler", "tourism", "voyage"],
   business: ["entreprise", "entrepreneur", "entrepreneuriat"],
   entrepreneur: ["business", "entreprise", "entrepreneuriat"],
   entreprise: ["business", "entrepreneur", "entrepreneuriat"],
   comedy: ["comedian"],
+  fintech: ["neobank", "néobanque", "open banking", "banque en ligne"],
+  neobank: ["fintech", "néobanque"],
+  néobanque: ["fintech", "neobank"],
+  fashion: ["clothing", "outfit", "mode"],
+  clothing: ["fashion", "mode"],
+  skincare: ["makeup", "beauty", "beauté", "maquillage"],
+  software: ["saas", "logiciel"],
+  wellness: ["health", "santé"],
+  health: ["wellness", "santé"],
+  "home decor": ["interior", "décoration", "decoration"],
+  interior: ["home decor", "décoration"],
+  entertainment: ["divertissement"],
+  cars: ["automotive", "voiture"],
+  automotive: ["cars", "voiture"],
+  pets: ["animals", "animaux"],
+  parenting: ["family", "parentalité"],
+  ecommerce: ["online store", "boutique en ligne"],
+  nonprofit: ["charity", "bénévolat"],
+  "real estate": ["property", "immobilier"],
+  crypto: ["blockchain", "cryptomonnaie"],
+  blockchain: ["crypto", "cryptomonnaie"],
+  photography: ["photographer", "photographie"],
+  lifestyle: ["vlog", "vlogs"],
+  diy: ["crafts", "bricolage"],
+  crafts: ["diy", "bricolage"],
+  sustainability: ["environment", "écologie"],
 };
 
 export function searchRelevance(input: {
@@ -126,7 +151,9 @@ export function topicTier(input: {
   const name = hits(input.title, input.keywords) || (input.handle ? hits(input.handle, input.keywords) : false);
   const description = input.description ? hits(input.description, input.keywords) : false;
   const videos = matchingTitles(input).length;
-  if (name || description || videos >= 2) return "strong";
+  // A channel is on topic only when its name or description says so.
+  // Matching video titles alone are a news clip or a one-off, not the channel's subject.
+  if (name || description) return "strong";
   if (videos >= 1) return "video";
   return "none";
 }
@@ -180,7 +207,6 @@ export async function discoverYouTubeChannels(
   const matchedByChannel = new Map<string, { videoId: string; title: string; description: string; publishedAt?: string }>();
   const kept: DiscoveredChannel[] = [];
   const pending: DiscoveredChannel[] = [];
-  const deferred: DiscoveredChannel[] = [];
   const persisted = new Set<string>();
   const excluded = new Set(query.excludeChannelIds ?? []);
   let filteredOut = 0;
@@ -268,12 +294,17 @@ export async function discoverYouTubeChannels(
 
   for (const country of countries) {
     for (const keyword of query.keywords) {
-      for (const term of searchQueries(keyword, country)) {
+      const terms = searchQueries(keyword, country);
+      for (let termIndex = 0; termIndex < terms.length; termIndex += 1) {
+        const term = terms[termIndex];
+        const pageBudget = termIndex === 0 ? MAX_PAGES_PER_QUERY : ALIAS_PAGES_PER_QUERY;
         for (const pass of audienceSearchPasses(query.minSubscribers, query.maxSubscribers)) {
+          if (kept.length >= wanted || seen.size >= cap) break;
+          let emptyPages = 0;
           let pageToken: string | undefined;
-          for (let page = 0; page < MAX_PAGES_PER_QUERY; page += 1) {
+          for (let page = 0; page < pageBudget; page += 1) {
             if (await shouldStop()) break;
-            if (kept.length + pending.length >= wanted || seen.size >= cap) break;
+            if (kept.length >= wanted || seen.size >= cap) break;
             await report("searching");
             const result = await client.search({
               query: term,
@@ -296,22 +327,22 @@ export async function discoverYouTubeChannels(
               listedIds.add(hit.channelId);
               fresh.push(hit.channelId);
             }
+            let pageTopical = 0;
             if (fresh.length > 0) {
               const listed = await client.listChannels(fresh);
               const returned = new Set(listed.map((channel) => channel.id));
               filteredOut += fresh.filter((id) => !returned.has(id)).length;
               const pageStrong: DiscoveredChannel[] = [];
               for (const channel of listed) {
-                const maxSubscribers = Math.min(query.maxSubscribers ?? MAX_CREATOR_SUBSCRIBERS, MAX_CREATOR_SUBSCRIBERS);
-                if (
-                  isAutoTopicChannel(channel.title) ||
-                  !channel.country ||
-                  !matchesDeclaredCountry(channel.country, query.countries) ||
-                  !matchesSubscriberRange(channel.subscriberVisibility, channel.subscriberCount, query.minSubscribers, maxSubscribers)
-                ) {
+                if (isAutoTopicChannel(channel.title)) {
                   filteredOut += 1;
                   continue;
                 }
+                const maxSubscribers = Math.min(query.maxSubscribers ?? MAX_CREATOR_SUBSCRIBERS, MAX_CREATOR_SUBSCRIBERS);
+                const inRange =
+                  Boolean(channel.country) &&
+                  matchesDeclaredCountry(channel.country, query.countries) &&
+                  matchesSubscriberRange(channel.subscriberVisibility, channel.subscriberCount, query.minSubscribers, maxSubscribers);
                 const built = emptyDiscovery(channel, {
                   discoveryRegion: regionByChannel.get(channel.id) ?? null,
                   recentVideoPublishedAt: recentByChannel.get(channel.id) ?? null,
@@ -326,46 +357,41 @@ export async function discoverYouTubeChannels(
                   videoTitle: built.matchedVideo.title,
                   keywords: query.keywords,
                 });
+                if (tier === "strong") pageTopical += 1;
+                if (!inRange) {
+                  filteredOut += 1;
+                  continue;
+                }
                 if (tier === "strong") pageStrong.push(built);
-                else if (tier === "video") deferred.push(built);
                 else filteredOut += 1;
               }
               pageStrong.sort((left, right) => cheapScore(right, query.keywords) - cheapScore(left, query.keywords));
-              const room = Math.max(0, wanted - kept.length - pending.length);
-              for (const channel of pageStrong.slice(0, room)) {
-                if (seen.size >= cap) break;
-                seen.add(channel.id);
-                pending.push(channel);
+              let offset = 0;
+              while (offset < pageStrong.length && kept.length < wanted && seen.size < cap) {
+                const room = Math.min(pageStrong.length - offset, wanted - kept.length - pending.length, cap - seen.size);
+                if (room <= 0) break;
+                for (const channel of pageStrong.slice(offset, offset + room)) {
+                  seen.add(channel.id);
+                  pending.push(channel);
+                }
+                offset += room;
+                if (kept.length + pending.length >= wanted || seen.size >= cap) await flushPending();
               }
             }
+            if (pageTopical > 0) emptyPages = 0;
+            else emptyPages += 1;
             pageToken = result.nextPageToken;
-            if (!pageToken) break;
+            if (emptyPages >= EMPTY_PAGE_LIMIT || !pageToken) break;
           }
-          if (kept.length + pending.length >= wanted || seen.size >= cap) break;
         }
-        if (kept.length + pending.length >= wanted || seen.size >= cap) break;
+        if (kept.length >= wanted || seen.size >= cap) break;
       }
-      if (kept.length + pending.length >= wanted || seen.size >= cap) break;
+      if (kept.length >= wanted || seen.size >= cap) break;
     }
-    if (kept.length + pending.length >= wanted || seen.size >= cap) break;
+    if (kept.length >= wanted || seen.size >= cap) break;
   }
 
   await flushPending();
-
-  deferred.sort((left, right) => cheapScore(right, query.keywords) - cheapScore(left, query.keywords));
-  let deferredIndex = 0;
-  while (kept.length < wanted && deferredIndex < deferred.length && seen.size < cap) {
-    if (await shouldStop()) break;
-    const need = Math.max(1, wanted - kept.length);
-    const slice = deferred.slice(deferredIndex, deferredIndex + Math.min(need, cap - seen.size));
-    deferredIndex += slice.length;
-    if (slice.length === 0) break;
-    for (const channel of slice) seen.add(channel.id);
-    for (const channel of slice) stampMatched(channel);
-    await report("reading");
-    await enrichActivity(client, slice, matchedByChannel, shouldStop);
-    for (const channel of slice) await accept(channel);
-  }
 
   kept.sort((left, right) => right.relevanceScore - left.relevanceScore);
   return { channels: kept, duplicates, filteredOut, candidateIds: seen.size };

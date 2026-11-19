@@ -115,7 +115,7 @@ export function CreatorResultList({
       {loading && visible.length === 0 ? <Skeleton className="h-40 rounded-2xl" /> : null}
       {!loading && !finished && visible.length === 0 ? <Skeleton className="h-28 rounded-2xl" /> : null}
       {!loading && finished && visible.length === 0 ? (
-        <p className="rounded-2xl border bg-card px-4 py-8 text-center text-sm text-muted-foreground">No creator was found.</p>
+        <p className="rounded-2xl border bg-card px-4 py-8 text-center text-sm text-muted-foreground">{note || "No creator was found."}</p>
       ) : null}
 
       <div className="space-y-3">

@@ -263,13 +263,15 @@ describe("discovery enrichment", () => {
   it("fills the requested count with name and description matches before a single video mention", async () => {
     expect(topicTier({ title: "Caleb Hammer", handle: null, description: "Weekly finance show", videoTitle: "Episode 12", recentTitles: [], keywords: ["Finance"] })).toBe("strong");
     expect(topicTier({ title: "AI Lab", handle: null, description: "", videoTitle: null, recentTitles: [], keywords: ["artificial intelligence"] })).toBe("strong");
-    expect(topicTier({ title: "Daily Cuts", handle: null, description: "", videoTitle: "Intro", recentTitles: ["Finance Friday", "More finance talk"], keywords: ["Finance"] })).toBe("strong");
+    expect(topicTier({ title: "Daily Cuts", handle: null, description: "", videoTitle: "Intro", recentTitles: ["Finance Friday", "More finance talk"], keywords: ["Finance"] })).toBe("video");
     expect(topicTier({ title: "CBS News", handle: "@cbs", description: "Breaking news", videoTitle: "What is artificial intelligence?", recentTitles: ["Evening news"], keywords: ["artificial intelligence"] })).toBe("video");
     expect(topicTier({ title: "CBS News", handle: null, description: "Evening intelligence briefing", videoTitle: null, recentTitles: [], keywords: ["artificial intelligence"] })).toBe("none");
     expect(topicTier({ title: "Home Cook", handle: null, description: "", videoTitle: null, recentTitles: [], keywords: ["Food"] })).toBe("strong");
     expect(topicTier({ title: "Finance Hebdo", handle: null, description: "", videoTitle: null, recentTitles: [], keywords: ["Business et finance"] })).toBe("strong");
     expect(topicTier({ title: "Tech Weekly", handle: null, description: "", videoTitle: null, recentTitles: [], keywords: ["AI and tech"] })).toBe("strong");
     expect(topicTier({ title: "Les affaires", handle: null, description: "", videoTitle: null, recentTitles: [], keywords: ["Business et finance"] })).toBe("none");
+    expect(topicTier({ title: "Néobanque", handle: null, description: "Banque en ligne", videoTitle: null, recentTitles: [], keywords: ["fintech"] })).toBe("strong");
+    expect(topicTier({ title: "Mode", handle: null, description: "Tenues", videoTitle: null, recentTitles: [], keywords: ["fashion"] })).toBe("strong");
     const fetchImpl = vi.fn(async (url: string) => {
       const parsed = new URL(url);
       if (parsed.pathname.endsWith("/search") && parsed.searchParams.get("type") === "video") {

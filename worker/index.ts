@@ -2,6 +2,7 @@ import "@/lib/load-env";
 import { Worker } from "bullmq";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { ensureFillPoolJob, FILL_CRON } from "@/lib/jobs/fill-pool";
 import { ensurePruneInactiveJob } from "@/lib/jobs/prune-inactive";
 import { runProcessingJob } from "@/lib/jobs/runner";
 import { QUEUE_NAME, getQueue } from "@/lib/jobs/queue";
@@ -21,6 +22,10 @@ const worker = new Worker(
       await ensurePruneInactiveJob();
       return;
     }
+    if (job.name === "schedule-fill-pool") {
+      await ensureFillPoolJob();
+      return;
+    }
     await runProcessingJob(String(job.data.processingJobId));
   },
   { connection, concurrency },
@@ -30,6 +35,10 @@ worker.on("failed", async (job, error) => {
   if (!job) return;
   if (job.name === "schedule-prune-inactive") {
     logger.error("inactive channel sweep was not queued", { message: error.message });
+    return;
+  }
+  if (job.name === "schedule-fill-pool") {
+    logger.error("creator pool was not queued", { message: error.message });
     return;
   }
   const maxAttempts = job.opts.attempts ?? 1;
@@ -67,6 +76,11 @@ async function start() {
       "prune-inactive-channels",
       { pattern: "15 4 * * *" },
       { name: "schedule-prune-inactive", data: {} },
+    );
+    await queue.upsertJobScheduler(
+      "fill-creator-pool",
+      { pattern: FILL_CRON },
+      { name: "schedule-fill-pool", data: {} },
     );
     await ensurePruneInactiveJob().catch((error) => {
       logger.error("inactive channel sweep was not queued", { message: error instanceof Error ? error.message : "unknown" });

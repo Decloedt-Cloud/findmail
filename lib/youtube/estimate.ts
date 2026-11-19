@@ -2,15 +2,23 @@ import { YOUTUBE_QUOTA_COSTS } from "@/lib/constants";
 import { audienceSearchPasses } from "@/lib/youtube/audience";
 import { searchQueries } from "@/lib/youtube/terms";
 
-/** Same page cap as `discoverYouTubeChannels`. */
-const MAX_PAGES_PER_QUERY = 3;
+/**
+ * Pages read for the first wording while it still finds channels on the topic.
+ * Extra wordings only get `ALIAS_PAGES_PER_QUERY`. Two pages in a row with no
+ * channel on the topic stop that pass. A page of on-topic channels outside the
+ * country or subscriber band does not stop the search. Shared with
+ * `discoverYouTubeChannels`.
+ */
+export const MAX_PAGES_PER_QUERY = 8;
+export const ALIAS_PAGES_PER_QUERY = 2;
+export const EMPTY_PAGE_LIMIT = 2;
 
 /** Uploads pulled per channel in `enrichActivity`, plus the matched search video. */
 const VIDEOS_PER_CHANNEL = 21;
 
 export function inspectLimit(maxResults: number) {
   const requested = Math.max(1, maxResults);
-  return Math.min(200, Math.max(requested, requested * 5));
+  return Math.min(300, Math.max(requested, requested * 8));
 }
 
 /**
@@ -45,7 +53,10 @@ export function estimateSearchQuota(input: {
   for (const country of countries) {
     for (const keyword of keywords) {
       const terms = Math.max(1, searchQueries(keyword, country).length);
-      searchCalls += terms * passes * MAX_PAGES_PER_QUERY;
+      for (let index = 0; index < terms; index += 1) {
+        const pages = index === 0 ? MAX_PAGES_PER_QUERY : ALIAS_PAGES_PER_QUERY;
+        searchCalls += pages * passes;
+      }
     }
   }
 
