@@ -51,8 +51,10 @@ export const wayoAdsIcpSchema = z.object({
    * and the run looks for `maxChannels` new ones behind them.
    */
   searchAgain: z.boolean().optional().default(false),
-  countries: z.array(z.string().trim().regex(/^[A-Za-z]{2}$/)).max(60).optional(),
-  /** ISO 639-1. Search phrases and YouTube relevanceLanguage use this code. */
+  countries: z.array(z.string().trim().regex(/^[A-Za-z]{2}$/)).max(200).optional(),
+  /** ISO 639-1 codes. Search phrases and YouTube relevanceLanguage use every one. */
+  languages: z.array(z.string().trim().regex(/^[A-Za-z]{2}$/)).max(30).optional(),
+  /** ISO 639-1. Kept when a caller still sends a single code. */
   language: z.string().trim().regex(/^[A-Za-z]{2}$/).optional(),
   request: z
     .object({
@@ -97,6 +99,8 @@ export const wayoAdsIcpMatchQuerySchema = z.object({
   onboardingId: z.string().trim().min(4).max(80),
   requestId: z.string().trim().min(4).max(80).optional(),
   countries: z.string().trim().max(1200).optional(),
+  /** Current site. A previous site's finished search must not be returned for it. */
+  website: z.string().trim().max(500).optional(),
 });
 
 export const wayoAdsCreatorQuerySchema = z.object({
@@ -104,6 +108,8 @@ export const wayoAdsCreatorQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(100).default(50),
   country: z.string().trim().regex(/^[A-Za-z]{2}$/).optional(),
   q: z.string().trim().min(1).max(200).optional(),
+  /** Comma-separated creator ids or YouTube channel ids. Used to email a selection. */
+  ids: z.string().trim().max(4000).optional(),
 });
 
 /** Wayo Ads creator→brand company lead prefilter. */

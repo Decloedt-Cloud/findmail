@@ -2,12 +2,12 @@ import { logger } from "@/lib/logger";
 import { parseSearchQueries } from "@/lib/icp/queries";
 import { searchPhraseRule } from "@/lib/icp/search-language";
 
-function systemPrompt(language: string | null) {
+function systemPrompt(language: string | null, extra: string[] = []) {
   return [
   "You turn a simplified advertiser ICP into YouTube search queries.",
   "Return JSON only: {\"queries\": string[], \"note\": string}.",
   "Write 3 or 4 short search phrases, 2 to 6 words, that would find public videos whose viewers match this ICP.",
-  searchPhraseRule(language),
+  searchPhraseRule(language, extra),
   "Search for the educational, professional, or entertainment topics the target people watch, not the advertiser's product.",
   "For a B2B product, target the profession and its day-to-day work, problems, skills, and goals.",
   "The first phrase is special: write only the broad profession or audience topic in 2 or 3 words.",
@@ -24,6 +24,7 @@ export async function searchQueriesForIcp(input: {
   websiteUrl: string;
   snapshot: unknown;
   language?: string | null;
+  languages?: string[];
 }) {
   const apiKey = process.env.DEEPSEEK_API_KEY?.trim();
   if (!apiKey) throw new Error("DEEPSEEK_API_KEY is not configured.");
@@ -41,7 +42,7 @@ export async function searchQueriesForIcp(input: {
       max_tokens: 1200,
       response_format: { type: "json_object" },
       messages: [
-        { role: "system", content: systemPrompt(input.language ?? null) },
+        { role: "system", content: systemPrompt(input.language ?? null, input.languages ?? []) },
         {
           role: "user",
           content: JSON.stringify({

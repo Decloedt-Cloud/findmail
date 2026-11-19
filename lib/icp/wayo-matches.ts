@@ -2,6 +2,7 @@ import { USABLE_CONTACT, hasPublicContact } from "@/lib/creators/contact";
 import { usablePublicEmails } from "@/lib/creators/email";
 import { prisma } from "@/lib/db";
 import { ICP_MAX_SUBSCRIBERS, ICP_MIN_SUBSCRIBERS } from "@/lib/icp/audience";
+import { icpHost } from "@/lib/icp/identity";
 
 function snapshotRequestId(snapshot: unknown) {
   if (!snapshot || typeof snapshot !== "object") return "";
@@ -45,14 +46,27 @@ function snapshotRounds(snapshot: unknown) {
   return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 1;
 }
 
-export async function listWayoIcpMatches(input: { onboardingId: string; requestId?: string; countries?: string }) {
+function sameSite(websiteUrl: string, requested: string | undefined) {
+  if (!requested?.trim()) return true;
+  return icpHost(websiteUrl) === icpHost(requested);
+}
+
+export async function listWayoIcpMatches(input: {
+  onboardingId: string;
+  requestId?: string;
+  countries?: string;
+  website?: string;
+}) {
   const rows = await prisma.brandIcp.findMany({
     where: { wayoOnboardingId: input.onboardingId },
     orderBy: { createdAt: "desc" },
   });
-  const brand = input.requestId
-    ? rows.find((row) => snapshotRequestId(row.snapshot) === input.requestId) ?? null
-    : rows[0] ?? null;
+  const forRequest = input.requestId
+    ? rows.filter((row) => snapshotRequestId(row.snapshot) === input.requestId)
+    : rows;
+  /* The onboarding row is reused when the advertiser enters another URL. The
+     previous site's channels stay stored, and they must not fill the new search. */
+  const brand = forRequest.find((row) => sameSite(row.websiteUrl, input.website)) ?? null;
   if (!brand) {
     return { id: null, status: "MISSING" as const, creators: [] };
   }

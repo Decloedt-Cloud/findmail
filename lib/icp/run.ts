@@ -15,7 +15,7 @@ import { writeChannelIcp } from "@/lib/icp/channel-icp";
 import { discoverPublicEmail } from "@/lib/icp/public-email";
 import { UnrecoverableError } from "bullmq";
 import { searchQueriesForIcp } from "@/lib/icp/deepseek";
-import { snapshotSearchLanguage } from "@/lib/icp/search-language";
+import { snapshotSearchLanguages } from "@/lib/icp/search-language";
 import { reuseStoredCreators } from "@/lib/icp/reuse";
 import { selectCreatorsForIcp } from "@/lib/icp/select-creators";
 import { upsertMatchedChannel } from "@/lib/icp/store";
@@ -37,12 +37,13 @@ export async function runMatchIcpChannels(processingJobId: string) {
   });
 
   try {
-    const language = snapshotSearchLanguage(brand.snapshot);
+    const languages = snapshotSearchLanguages(brand.snapshot);
     const analyzed = await searchQueriesForIcp({
       brandName: brand.brandName,
       websiteUrl: brand.websiteUrl,
       snapshot: brand.snapshot,
-      language,
+      language: languages[0] ?? null,
+      languages,
     });
     await prisma.brandIcp.update({
       where: { id: brand.id },
@@ -74,14 +75,15 @@ export async function runMatchIcpChannels(processingJobId: string) {
       searchQueries: analyzed.queries,
       limit: target,
       countries,
-      language,
+      language: languages[0] ?? null,
+      languages,
       excludeCreatorIds: excludedCreatorIds,
     });
     // `reuseStoredCreators` answers with the row's total, not this run's share.
     const reused = Math.max(0, linkedTotal - linkedBefore);
     const remaining = Math.max(0, target - reused);
     const found = remaining > 0
-      ? await findAudienceChannels(analyzed.queries, remaining, countries, skipChannelIds, language)
+      ? await findAudienceChannels(analyzed.queries, remaining, countries, skipChannelIds, languages)
       : { channels: [], inspected: 0, quotaStopped: false };
     if (reused === 0 && found.channels.length === 0) {
       if (found.quotaStopped) {
@@ -225,7 +227,8 @@ function channelTarget(snapshot: unknown) {
   return CHANNEL_TARGET;
 }
 
-/** Empty match is a finished search, not a failed job. Wayo can re-queue later.
+/** Empty match is a finished search, not a failed job. A new search needs a
+ *  different country or language, or an explicit search again.
  *  A search again that finds nothing keeps the batch already on the request. */
 async function completeMatchWithNoChannels(input: {
   brandId: string;
@@ -460,7 +463,7 @@ async function findAudienceChannels(
   target: number,
   countries: string[] = [],
   skipChannelIds: Set<string> = new Set(),
-  language: string | null = null,
+  languages: string[] = [],
 ) {
   const poolTarget = target * 3;
   const kept = new Map<string, { channel: YouTubeChannel; publishedAt: Date | null; averageViews: number | null }>();
@@ -495,10 +498,20 @@ async function findAudienceChannels(
     },
   );
   let quotaStopped = false;
+  const spoken = languages.filter(Boolean);
+  const multiLanguage = spoken.length > 1;
   const singleCountry = countries.length === 1;
-  const regions = countries.length === 0 ? [undefined] : countries.length <= 20 ? countries : regionSearchCodes(countries);
+  const regions = multiLanguage
+    ? [singleCountry ? countries[0] : undefined]
+    : countries.length === 0
+      ? [undefined]
+      : countries.length <= 20
+        ? countries
+        : regionSearchCodes(countries);
+  const languagePasses: Array<string | null> = multiLanguage ? spoken : [spoken[0] ?? null];
   const phrases = icpSearchPlan(queries);
-  const maxPages = singleCountry ? 2 : 1;
+  const maxPages = singleCountry && !multiLanguage ? 2 : 1;
+  for (const relevanceLanguage of languagePasses) {
   for (const regionCode of regions) {
     if (kept.size >= poolTarget || quotaStopped) break;
     for (const { query } of phrases) {
@@ -513,7 +526,7 @@ async function findAudienceChannels(
             order: "relevance",
             maxResults: SEARCH_RESULTS,
             regionCode,
-            relevanceLanguage: language || undefined,
+            relevanceLanguage: relevanceLanguage || undefined,
             pageToken,
           });
         } catch (error) {
@@ -558,6 +571,7 @@ async function findAudienceChannels(
         if (!pageToken) break;
       }
     }
+  }
   }
   const selected = [...kept.values()].slice(0, target);
   const uploadIds = new Map<string, string[]>();

@@ -14,6 +14,8 @@ export async function reuseStoredCreators(input: {
   searchQueries: string[];
   limit: number;
   countries?: string[];
+  /** ISO 639-1 codes. A chosen list keeps channels that publish in one of them. */
+  languages?: string[];
   /** ISO 639-1. A chosen language keeps channels that publish in it. */
   language?: string | null;
   /** Channels already proposed for another request of this onboarding. */
@@ -22,12 +24,20 @@ export async function reuseStoredCreators(input: {
   if (input.limit <= 0) return 0;
   const requested = input.countries?.length ? input.countries : null;
   const excluded = input.excludeCreatorIds?.filter(Boolean) ?? [];
+  const languages = [
+    ...(input.languages ?? []),
+    ...(input.language ? [input.language] : []),
+  ]
+    .map((code) => code.trim())
+    .filter((code, index, list) => code.length > 0 && list.findIndex((item) => item.toLowerCase() === code.toLowerCase()) === index);
   const candidates = await prisma.creator.findMany({
     where: {
       hidden: false,
       ...(excluded.length ? { id: { notIn: excluded } } : {}),
       country: { in: requested ?? ICP_COUNTRIES },
-      ...(input.language ? { language: { equals: input.language, mode: "insensitive" as const } } : {}),
+      ...(languages.length
+        ? { OR: languages.map((code) => ({ language: { equals: code, mode: "insensitive" as const } })) }
+        : {}),
       subscriberVisibility: "PUBLIC",
       subscriberCount: { gte: ICP_MIN_SUBSCRIBERS, lte: ICP_MAX_SUBSCRIBERS },
       channelIcp: { not: Prisma.DbNull },

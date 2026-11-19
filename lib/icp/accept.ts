@@ -1,5 +1,5 @@
 import { ICP_AUDIENCE_KEY } from "@/lib/icp/audience";
-import { normalizeSearchLanguage, snapshotSearchLanguage } from "@/lib/icp/search-language";
+import { normalizeSearchLanguage, normalizeSearchLanguages, snapshotSearchLanguages } from "@/lib/icp/search-language";
 import { ApiError } from "@/lib/authz";
 import { prisma } from "@/lib/db";
 import { icpHost, icpIdentityKey } from "@/lib/icp/identity";
@@ -26,7 +26,8 @@ function buildSnapshot(input: IcpInput, maxChannels: number, rounds: number) {
     matchingText: input.matchingText ?? null,
   request: input.request ?? null,
   countries: (input.countries ?? []).map((code) => code.toUpperCase()),
-  searchLanguage: normalizeSearchLanguage(input.language),
+  searchLanguage: normalizeSearchLanguages(input.languages).at(0) ?? normalizeSearchLanguage(input.language),
+  searchLanguages: normalizeSearchLanguages([...(input.languages ?? []), input.language]),
   maxChannels,
   /** How many `maxChannels`-sized batches this request has asked for. */
   rounds,
@@ -99,16 +100,8 @@ function snapshotCountries(snapshot: unknown) {
   return raw.flatMap((code) => (typeof code === "string" && /^[A-Za-z]{2}$/.test(code) ? [code.toUpperCase()] : []));
 }
 
-function sameSearchLanguage(stored: string | null, requested: string | undefined) {
-  const next = normalizeSearchLanguage(requested);
-  if (!next) return true;
-  return stored === next;
-}
-
-function sameCountryList(stored: string[], requested: string[] | undefined) {
-  const next = [...new Set((requested ?? []).map((code) => code.toUpperCase()))].sort();
-  if (next.length === 0) return true;
-  return [...stored].sort().join(",") === next.join(",");
+function sameCodeList(stored: string[], requested: string[]) {
+  return [...stored].sort().join(",") === [...requested].sort().join(",");
 }
 
 function snapshotRounds(snapshot: unknown) {
@@ -141,19 +134,36 @@ export async function acceptWayoIcp(input: IcpInput) {
   if (input.stage === "complex" && input.requestId) {
     const same = copies.find((row) => snapshotRequestId(row.snapshot) === input.requestId) ?? null;
     if (input.searchAgain) {
-      /* One more batch on the same request. A run already in flight is not restarted:
-         it answers with its own status so the caller waits for it instead. */
-      if (same && (same.status === "QUEUED" || same.status === "RUNNING")) {
-        return { id: same.id, status: same.status, queued: false as const };
+      /* Claim the row before starting. Two clicks that arrive together cannot
+         both pass a status read and both open a YouTube search. */
+      if (same) {
+        const claimed = await prisma.brandIcp.updateMany({
+          where: { id: same.id, status: { notIn: ["QUEUED", "RUNNING"] } },
+          data: { status: "QUEUED" },
+        });
+        if (claimed.count === 0) {
+          const current = await prisma.brandIcp.findUnique({
+            where: { id: same.id },
+            select: { status: true },
+          });
+          return { id: same.id, status: current?.status ?? "RUNNING", queued: false as const };
+        }
       }
       const rounds = same ? snapshotRounds(same.snapshot) + 1 : 1;
       return queueBrand(input, same?.id ?? null, buildSnapshot(input, maxChannels, rounds), Boolean(same));
     }
+    const requestedLanguages = normalizeSearchLanguages([...(input.languages ?? []), input.language]);
+    const requestedCountries = [...new Set((input.countries ?? []).map((code) => code.toUpperCase()))];
+    /* An identical search that already finished, failed, or is running is not
+       started again. A different country or language still queues a new one. */
     if (
       same &&
-      isHealthyIcp(same) &&
-      sameCountryList(snapshotCountries(same.snapshot), input.countries) &&
-      sameSearchLanguage(snapshotSearchLanguage(same.snapshot), input.language)
+      sameCodeList(snapshotCountries(same.snapshot), requestedCountries) &&
+      sameCodeList(snapshotSearchLanguages(same.snapshot), requestedLanguages) &&
+      (isHealthyIcp(same) ||
+        same.status === "COMPLETED" ||
+        same.status === "PARTIALLY_COMPLETED" ||
+        same.status === "FAILED")
     ) {
       return { id: same.id, status: same.status, queued: false as const };
     }

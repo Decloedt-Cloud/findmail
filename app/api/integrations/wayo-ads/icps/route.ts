@@ -14,6 +14,7 @@ export async function GET(request: Request) {
       onboardingId: url.searchParams.get("onboardingId") ?? undefined,
       requestId: url.searchParams.get("requestId") ?? undefined,
       countries: url.searchParams.get("countries") ?? undefined,
+      website: url.searchParams.get("website") ?? undefined,
     });
     const result = await listWayoIcpMatches(input);
     return NextResponse.json(result);

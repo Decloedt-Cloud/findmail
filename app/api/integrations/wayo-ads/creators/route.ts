@@ -18,8 +18,24 @@ export async function GET(request: Request) {
       pageSize: url.searchParams.get("pageSize") ?? undefined,
       country: url.searchParams.get("country") ?? undefined,
       q: url.searchParams.get("q") ?? undefined,
+      ids: url.searchParams.get("ids") ?? undefined,
     });
-    const where: Prisma.CreatorWhereInput = {
+    const ids = (input.ids ?? "")
+      .split(",")
+      .map((id) => id.trim())
+      .filter((id) => id.length > 0 && id.length <= 80)
+      .slice(0, 40);
+    const where: Prisma.CreatorWhereInput = ids.length
+      ? {
+          OR: [{ id: { in: ids } }, { youtubeChannelId: { in: ids } }],
+          emails: {
+            some: {
+              verificationStatus: { notIn: [...UNUSABLE_EMAIL] },
+              emailAddress: { not: "" },
+            },
+          },
+        }
+      : {
       hidden: false,
       subscriberVisibility: "PUBLIC",
       subscriberCount: { gte: ICP_MIN_SUBSCRIBERS },
@@ -45,8 +61,8 @@ export async function GET(request: Request) {
       prisma.creator.findMany({
         where,
         orderBy: [{ subscriberCount: { sort: "desc", nulls: "last" } }, { discoveredAt: "desc" }],
-        skip: (input.page - 1) * input.pageSize,
-        take: input.pageSize,
+        skip: ids.length ? 0 : (input.page - 1) * input.pageSize,
+        take: ids.length ? ids.length : input.pageSize,
         select: {
           id: true,
           youtubeChannelId: true,
