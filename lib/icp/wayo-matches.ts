@@ -81,7 +81,7 @@ export async function listWayoIcpMatches(input: { onboardingId: string; requestI
         ],
       },
     },
-    orderBy: { createdAt: "asc" },
+    orderBy: { creator: { subscriberCount: "desc" } },
     take: limit,
     include: {
       creator: {
@@ -92,8 +92,9 @@ export async function listWayoIcpMatches(input: { onboardingId: string; requestI
           channelHandle: true,
           channelUrl: true,
           description: true,
-          country: true,
-          keywords: true,
+        country: true,
+        language: true,
+        keywords: true,
           subscriberCount: true,
           subscriberVisibility: true,
           videoCount: true,
@@ -154,6 +155,7 @@ if (
         subscriberCount: creator.subscriberCount ?? 0,
         averageViews: creator.averageViews ?? 0,
         country: creator.country,
+        language: creator.language,
         channelIcpName: channelIcpName(creator.channelIcp),
         email: emails[0]?.emailAddress ?? null,
         emails: emails.map((item) => item.emailAddress),

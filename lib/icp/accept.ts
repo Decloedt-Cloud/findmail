@@ -1,4 +1,5 @@
 import { ICP_AUDIENCE_KEY } from "@/lib/icp/audience";
+import { normalizeSearchLanguage, snapshotSearchLanguage } from "@/lib/icp/search-language";
 import { ApiError } from "@/lib/authz";
 import { prisma } from "@/lib/db";
 import { icpHost, icpIdentityKey } from "@/lib/icp/identity";
@@ -25,6 +26,7 @@ function buildSnapshot(input: IcpInput, maxChannels: number, rounds: number) {
     matchingText: input.matchingText ?? null,
   request: input.request ?? null,
   countries: (input.countries ?? []).map((code) => code.toUpperCase()),
+  searchLanguage: normalizeSearchLanguage(input.language),
   maxChannels,
   /** How many `maxChannels`-sized batches this request has asked for. */
   rounds,
@@ -97,6 +99,12 @@ function snapshotCountries(snapshot: unknown) {
   return raw.flatMap((code) => (typeof code === "string" && /^[A-Za-z]{2}$/.test(code) ? [code.toUpperCase()] : []));
 }
 
+function sameSearchLanguage(stored: string | null, requested: string | undefined) {
+  const next = normalizeSearchLanguage(requested);
+  if (!next) return true;
+  return stored === next;
+}
+
 function sameCountryList(stored: string[], requested: string[] | undefined) {
   const next = [...new Set((requested ?? []).map((code) => code.toUpperCase()))].sort();
   if (next.length === 0) return true;
@@ -141,7 +149,12 @@ export async function acceptWayoIcp(input: IcpInput) {
       const rounds = same ? snapshotRounds(same.snapshot) + 1 : 1;
       return queueBrand(input, same?.id ?? null, buildSnapshot(input, maxChannels, rounds), Boolean(same));
     }
-    if (same && isHealthyIcp(same) && sameCountryList(snapshotCountries(same.snapshot), input.countries)) {
+    if (
+      same &&
+      isHealthyIcp(same) &&
+      sameCountryList(snapshotCountries(same.snapshot), input.countries) &&
+      sameSearchLanguage(snapshotSearchLanguage(same.snapshot), input.language)
+    ) {
       return { id: same.id, status: same.status, queued: false as const };
     }
     return queueBrand(input, same?.id ?? null, buildSnapshot(input, maxChannels, 1));

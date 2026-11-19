@@ -35,6 +35,7 @@ export function toWayoAdsCreator<T extends {
   channelUrl: string;
   description: string | null;
   country: string | null;
+  language?: string | null;
   keywords: string[];
   subscriberCount: number | null;
   subscriberVisibility: string;
@@ -63,6 +64,7 @@ export function toWayoAdsCreator<T extends {
     channelUrl: creator.channelUrl,
     description: creator.description,
     country: creator.country,
+    language: creator.language ?? null,
     keywords: creator.keywords,
     subscriberCount: creator.subscriberCount,
     subscriberVisibility: creator.subscriberVisibility,

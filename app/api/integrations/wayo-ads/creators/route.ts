@@ -3,6 +3,7 @@ import type { Prisma } from "@prisma/client";
 import { enforceRateLimit, jsonError } from "@/lib/api";
 import { prisma } from "@/lib/db";
 import { assertWayoAdsKey, bearerToken, toWayoAdsCreator } from "@/lib/integrations/wayo-ads";
+import { ICP_MIN_SUBSCRIBERS } from "@/lib/icp/audience";
 import { wayoAdsCreatorQuerySchema } from "@/lib/schemas";
 
 const UNUSABLE_EMAIL = ["INVALID", "NOT_FOUND"] as const;
@@ -20,6 +21,8 @@ export async function GET(request: Request) {
     });
     const where: Prisma.CreatorWhereInput = {
       hidden: false,
+      subscriberVisibility: "PUBLIC",
+      subscriberCount: { gte: ICP_MIN_SUBSCRIBERS },
       // Catalog rows must have a usable public email (INVALID / blank do not count).
       emails: {
         some: {
@@ -52,6 +55,7 @@ export async function GET(request: Request) {
           channelUrl: true,
           description: true,
           country: true,
+          language: true,
           keywords: true,
           subscriberCount: true,
           subscriberVisibility: true,

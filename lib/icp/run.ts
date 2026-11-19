@@ -15,6 +15,7 @@ import { writeChannelIcp } from "@/lib/icp/channel-icp";
 import { discoverPublicEmail } from "@/lib/icp/public-email";
 import { UnrecoverableError } from "bullmq";
 import { searchQueriesForIcp } from "@/lib/icp/deepseek";
+import { snapshotSearchLanguage } from "@/lib/icp/search-language";
 import { reuseStoredCreators } from "@/lib/icp/reuse";
 import { selectCreatorsForIcp } from "@/lib/icp/select-creators";
 import { upsertMatchedChannel } from "@/lib/icp/store";
@@ -36,10 +37,12 @@ export async function runMatchIcpChannels(processingJobId: string) {
   });
 
   try {
+    const language = snapshotSearchLanguage(brand.snapshot);
     const analyzed = await searchQueriesForIcp({
       brandName: brand.brandName,
       websiteUrl: brand.websiteUrl,
       snapshot: brand.snapshot,
+      language,
     });
     await prisma.brandIcp.update({
       where: { id: brand.id },
@@ -71,13 +74,14 @@ export async function runMatchIcpChannels(processingJobId: string) {
       searchQueries: analyzed.queries,
       limit: target,
       countries,
+      language,
       excludeCreatorIds: excludedCreatorIds,
     });
     // `reuseStoredCreators` answers with the row's total, not this run's share.
     const reused = Math.max(0, linkedTotal - linkedBefore);
     const remaining = Math.max(0, target - reused);
     const found = remaining > 0
-      ? await findAudienceChannels(analyzed.queries, remaining, countries, skipChannelIds)
+      ? await findAudienceChannels(analyzed.queries, remaining, countries, skipChannelIds, language)
       : { channels: [], inspected: 0, quotaStopped: false };
     if (reused === 0 && found.channels.length === 0) {
       if (found.quotaStopped) {
@@ -123,18 +127,6 @@ export async function runMatchIcpChannels(processingJobId: string) {
       limit: remaining,
     });
     const deepseekSelected = selectedFresh.length;
-    if (selectedFresh.length === 0 && freshCreators.length > 0) {
-      // DeepSeek often returns [] on niche B2B ICPs; keep reachable channels, else top pool for contact crawl.
-      selectedFresh = await fallbackSelectableCreators(
-        freshCreators.map((creator) => creator.id),
-        remaining,
-      );
-      logger.info("icp creator select fallback", {
-        brandIcpId: brand.id,
-        candidates: freshCreators.length,
-        kept: selectedFresh.length,
-      });
-    }
     const selectedSet = new Set(selectedFresh);
     for (const creatorId of selectedFresh) {
       await prisma.icpChannelMatch.upsert({
@@ -334,47 +326,6 @@ async function writeMissingChannelIcps(brandIcpId: string, youtubeChannels: YouT
   }
 }
 
-/** Prefer creators that already expose a public contact; otherwise keep the top of the pool for email crawl. */
-async function fallbackSelectableCreators(creatorIds: string[], limit: number) {
-  if (limit <= 0 || creatorIds.length === 0) return [];
-  const rows = await prisma.creator.findMany({
-    where: { id: { in: creatorIds } },
-    select: {
-      id: true,
-      subscriberCount: true,
-      instagramUrl: true,
-      twitterUrl: true,
-      tiktokUrl: true,
-      emails: {
-        where: {
-          verificationStatus: { notIn: ["INVALID", "NOT_FOUND"] as const },
-          emailAddress: { not: "" },
-        },
-        select: { id: true },
-        take: 1,
-      },
-    },
-  });
-  const byId = new Map(rows.map((row) => [row.id, row]));
-  const ordered = creatorIds
-    .map((id) => byId.get(id))
-    .filter((row): row is (typeof rows)[number] => Boolean(row));
-  const reachable = ordered.filter((row) =>
-    hasPublicContact({
-      instagramUrl: row.instagramUrl,
-      twitterUrl: row.twitterUrl,
-      tiktokUrl: row.tiktokUrl,
-      emailCount: row.emails.length,
-    }),
-  );
-  const pool = reachable.length > 0 ? reachable : ordered;
-  return pool
-    .slice()
-    .sort((a, b) => (b.subscriberCount ?? 0) - (a.subscriberCount ?? 0))
-    .slice(0, limit)
-    .map((row) => row.id);
-}
-
 async function discardCreatedWithoutContact(creatorIds: string[]) {
   const rows = await prisma.creator.findMany({
     where: { id: { in: creatorIds } },
@@ -509,6 +460,7 @@ async function findAudienceChannels(
   target: number,
   countries: string[] = [],
   skipChannelIds: Set<string> = new Set(),
+  language: string | null = null,
 ) {
   const poolTarget = target * 3;
   const kept = new Map<string, { channel: YouTubeChannel; publishedAt: Date | null; averageViews: number | null }>();
@@ -561,6 +513,7 @@ async function findAudienceChannels(
             order: "relevance",
             maxResults: SEARCH_RESULTS,
             regionCode,
+            relevanceLanguage: language || undefined,
             pageToken,
           });
         } catch (error) {

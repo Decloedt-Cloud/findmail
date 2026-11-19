@@ -47,6 +47,11 @@ describe("Wayo Ads ICP payload", () => {
     expect(wayoAdsIcpSchema.safeParse(body).success).toBe(false);
   });
 
+  it("keeps the language the request asked the search to use", () => {
+    const parsed = wayoAdsIcpSchema.parse(payload({ language: "fr" }));
+    expect(parsed.language).toBe("fr");
+  });
+
   it("defaults a plain search to a first round, not a search again", () => {
     const parsed = wayoAdsIcpSchema.parse(payload());
     expect(parsed.searchAgain).toBe(false);

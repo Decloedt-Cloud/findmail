@@ -14,6 +14,8 @@ export async function reuseStoredCreators(input: {
   searchQueries: string[];
   limit: number;
   countries?: string[];
+  /** ISO 639-1. A chosen language keeps channels that publish in it. */
+  language?: string | null;
   /** Channels already proposed for another request of this onboarding. */
   excludeCreatorIds?: string[];
 }) {
@@ -25,6 +27,7 @@ export async function reuseStoredCreators(input: {
       hidden: false,
       ...(excluded.length ? { id: { notIn: excluded } } : {}),
       country: { in: requested ?? ICP_COUNTRIES },
+      ...(input.language ? { language: { equals: input.language, mode: "insensitive" as const } } : {}),
       subscriberVisibility: "PUBLIC",
       subscriberCount: { gte: ICP_MIN_SUBSCRIBERS, lte: ICP_MAX_SUBSCRIBERS },
       channelIcp: { not: Prisma.DbNull },

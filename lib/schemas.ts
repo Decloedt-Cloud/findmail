@@ -52,6 +52,8 @@ export const wayoAdsIcpSchema = z.object({
    */
   searchAgain: z.boolean().optional().default(false),
   countries: z.array(z.string().trim().regex(/^[A-Za-z]{2}$/)).max(60).optional(),
+  /** ISO 639-1. Search phrases and YouTube relevanceLanguage use this code. */
+  language: z.string().trim().regex(/^[A-Za-z]{2}$/).optional(),
   request: z
     .object({
       title: icpText.optional(),
