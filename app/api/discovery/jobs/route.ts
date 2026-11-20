@@ -3,6 +3,7 @@ import { jsonError, requireUser } from "@/lib/api";
 import { creatorMatchesTopic } from "@/lib/creators/query";
 import { prisma } from "@/lib/db";
 import { matchesSearchCountry } from "@/lib/youtube/client";
+import { youtubeQuotaDayStart } from "@/lib/youtube/quota-day";
 
 export async function GET(request: Request) {
   try {
@@ -10,8 +11,7 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const page = Math.max(1, Number(url.searchParams.get("page") || 1));
     const pageSize = Math.min(100, Math.max(1, Number(url.searchParams.get("pageSize") || 20)));
-    const start = new Date();
-    start.setUTCHours(0, 0, 0, 0);
+    const start = youtubeQuotaDayStart();
     const [total, jobs, used] = await prisma.$transaction([
       prisma.searchJob.count(),
       prisma.searchJob.findMany({

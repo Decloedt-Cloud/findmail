@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { queueJob } from "@/lib/jobs/actions";
 import { discoverySchema } from "@/lib/schemas";
 import { estimateSearchQuota } from "@/lib/youtube/client";
+import { youtubeQuotaDayStart } from "@/lib/youtube/quota-day";
 
 export async function POST(request: Request) {
   try {
@@ -24,8 +25,7 @@ export async function POST(request: Request) {
       minSubscribers: input.minSubscribers,
       maxSubscribers: input.maxSubscribers,
     });
-    const start = new Date();
-    start.setUTCHours(0, 0, 0, 0);
+    const start = youtubeQuotaDayStart();
     const used = await prisma.apiUsage.aggregate({
       where: { provider: "youtube", createdAt: { gte: start } },
       _sum: { units: true },

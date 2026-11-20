@@ -59,6 +59,26 @@ describe("nightly creator pool", () => {
     expect(stoppedByRateLimit(["The nightly creator pool stopped at its unit cap."])).toBe(false);
   });
 
+  it("spaces search.list calls further apart than other calls", async () => {
+    vi.useFakeTimers();
+    const fetchImpl = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+    const paced = paceYouTubeFetch(fetchImpl, 1000, 5000);
+    const first = paced("https://www.googleapis.com/youtube/v3/search?q=a");
+    await vi.runAllTimersAsync();
+    await first;
+    const channels = paced("https://www.googleapis.com/youtube/v3/channels?id=a");
+    await vi.advanceTimersByTimeAsync(1000);
+    await channels;
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const search = paced("https://www.googleapis.com/youtube/v3/search?q=b");
+    await vi.advanceTimersByTimeAsync(3999);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    await search;
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    vi.useRealTimers();
+  });
+
   it("waits between YouTube calls", async () => {
     vi.useFakeTimers();
     const fetchImpl = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }));

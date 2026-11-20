@@ -271,6 +271,10 @@ describe("discovery enrichment", () => {
     expect(topicTier({ title: "Tech Weekly", handle: null, description: "", videoTitle: null, recentTitles: [], keywords: ["AI and tech"] })).toBe("strong");
     expect(topicTier({ title: "Les affaires", handle: null, description: "", videoTitle: null, recentTitles: [], keywords: ["Business et finance"] })).toBe("none");
     expect(topicTier({ title: "Néobanque", handle: null, description: "Banque en ligne", videoTitle: null, recentTitles: [], keywords: ["fintech"] })).toBe("strong");
+    expect(topicTier({ title: "How To", handle: null, description: "A weekly tutorial", videoTitle: null, recentTitles: [], keywords: ["education"] })).toBe("none");
+    expect(topicTier({ title: "My Days", handle: null, description: "Daily vlog", videoTitle: null, recentTitles: [], keywords: ["lifestyle"] })).toBe("none");
+    expect(topicTier({ title: "At Home", handle: null, description: "Family life", videoTitle: null, recentTitles: [], keywords: ["parenting"] })).toBe("none");
+    expect(topicTier({ title: "Lauren", handle: null, description: "Honest makeup reviews", videoTitle: null, recentTitles: [], keywords: ["beauty"] })).toBe("strong");
     expect(topicTier({ title: "Mode", handle: null, description: "Tenues", videoTitle: null, recentTitles: [], keywords: ["fashion"] })).toBe("strong");
     const fetchImpl = vi.fn(async (url: string) => {
       const parsed = new URL(url);

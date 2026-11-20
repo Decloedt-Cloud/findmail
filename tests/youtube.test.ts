@@ -571,6 +571,9 @@ describe("youtube credentials and quota", () => {
     expect(searchQueries("beauty", "US")).toEqual(["beauty", "skincare", "makeup"]);
     expect(searchQueries("beauty", "FR")).toEqual(["beauty", "skincare", "makeup", "beauté", "maquillage"]);
     expect(searchQueries("skincare", "US")).toEqual(["skincare", "makeup", "beauty"]);
+    expect(searchQueries("education", "US")).toEqual(["education"]);
+    expect(searchQueries("lifestyle", "US")).toEqual(["lifestyle"]);
+    expect(searchQueries("parenting", "US")).toEqual(["parenting"]);
     expect(searchQueries("skincare", "FR")).toEqual(["skincare", "makeup", "beauty", "beauté"]);
     expect(audienceFocus(5000, 20000)).toBe("small");
     expect(audienceFocus(20000, 100000)).toBe("mid");

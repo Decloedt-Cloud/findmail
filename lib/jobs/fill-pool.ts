@@ -6,6 +6,7 @@ import { DISCOVERY_NICHES } from "@/lib/discovery-catalog";
 import { enqueueProcessingJob } from "@/lib/jobs/queue";
 import { MAX_CREATOR_SUBSCRIBERS, MIN_CREATOR_SUBSCRIBERS } from "@/lib/constants";
 import { topicTier } from "@/lib/youtube/discovery";
+import { youtubeQuotaDayStart } from "@/lib/youtube/quota-day";
 import type { YouTubeFetch } from "@/lib/youtube/client";
 import { qualifiesForStorage } from "@/lib/youtube/qualify";
 
@@ -17,6 +18,11 @@ export const FILL_NIGHT_UNITS = 4000;
 export const FILL_MAX_RESULTS = 10;
 /** Gap between YouTube calls so a burst does not trip rateLimitExceeded. */
 export const FILL_REQUEST_GAP_MS = 3000;
+/** Manual searches: short gap between any calls, long gap between search.list calls. */
+export const SEARCH_REQUEST_GAP_MS = 1000;
+export const SEARCH_CALL_GAP_MS = 5000;
+/** Nightly pool: same spacing, slower searches. */
+export const FILL_SEARCH_CALL_GAP_MS = 6000;
 const SEARCH_UNITS = 100;
 
 const BUSY_JOBS = ["DISCOVER_CREATORS", "MATCH_ICP_CHANNELS", "PRUNE_INACTIVE_CHANNELS"] as const;
@@ -64,12 +70,28 @@ export function stoppedByRateLimit(messages: Array<string | null | undefined>) {
   return messages.some((message) => /rateLimit/i.test(message ?? ""));
 }
 
-export function paceYouTubeFetch(fetchImpl: YouTubeFetch, gapMs = FILL_REQUEST_GAP_MS): YouTubeFetch {
-  let last = 0;
+/**
+ * Spaces YouTube calls. `gapMs` applies between any two calls. `searchGapMs`
+ * applies between two search.list calls, which cost 100 units and hit the
+ * rate limit first.
+ */
+export function paceYouTubeFetch(
+  fetchImpl: YouTubeFetch,
+  gapMs = FILL_REQUEST_GAP_MS,
+  searchGapMs = gapMs,
+): YouTubeFetch {
+  let lastAny = 0;
+  let lastSearch = 0;
   return async (url, init) => {
-    const wait = last === 0 ? 0 : gapMs - (Date.now() - last);
+    const now = Date.now();
+    const isSearch = new URL(url).pathname.endsWith("/search");
+    const waitAny = lastAny === 0 ? 0 : gapMs - (now - lastAny);
+    const waitSearch = isSearch && lastSearch !== 0 ? searchGapMs - (now - lastSearch) : 0;
+    const wait = Math.max(waitAny, waitSearch);
     if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
-    last = Date.now();
+    const sentAt = Date.now();
+    lastAny = sentAt;
+    if (isSearch) lastSearch = sentAt;
     return fetchImpl(url, init);
   };
 }
@@ -98,7 +120,7 @@ export async function ensureFillPoolJob(now = new Date()) {
   const [usage, tonight, limited] = await Promise.all([
     prisma.apiUsage.aggregate({
       _sum: { units: true },
-      where: { provider: "youtube", createdAt: { gte: utcDayStart(now) } },
+      where: { provider: "youtube", createdAt: { gte: youtubeQuotaDayStart(now) } },
     }),
     prisma.searchJob.findMany({
       where: {
@@ -227,10 +249,4 @@ async function fillNicheStock(): Promise<FillNiche[]> {
     ).length,
     lastFilledAt: lastFilled.get(niche.id) ?? null,
   }));
-}
-
-function utcDayStart(now: Date) {
-  const start = new Date(now);
-  start.setUTCHours(0, 0, 0, 0);
-  return start;
 }

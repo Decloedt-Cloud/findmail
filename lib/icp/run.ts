@@ -21,11 +21,24 @@ import { selectCreatorsForIcp } from "@/lib/icp/select-creators";
 import { upsertMatchedChannel } from "@/lib/icp/store";
 import { YouTubeApiError, YouTubeClient, createYouTubeClient, matchesSubscriberRange, type YouTubeChannel, type YouTubeVideoDetails } from "@/lib/youtube/client";
 import { selectRecentPublicVideos } from "@/lib/youtube/metrics";
+import { icpSearchPausedUntil, youtubeQuotaDayStart } from "@/lib/youtube/quota-day";
 
 export async function runMatchIcpChannels(processingJobId: string) {
   const brand = await prisma.brandIcp.findUnique({ where: { processingJobId } });
   if (!brand) throw new Error("ICP match is missing its saved profile.");
   if (brand.status === "COMPLETED" && brand.matchedChannelCount > 0) return;
+
+  const pausedUntil = icpSearchPausedUntil();
+  if (pausedUntil && Date.now() < pausedUntil.getTime()) {
+    const message = `ICP matching is paused until ${pausedUntil.toISOString()} to stay within the YouTube daily search limit.`;
+    await prisma.brandIcp.update({ where: { id: brand.id }, data: { status: "FAILED", errorSummary: message } });
+    await prisma.processingJob.update({
+      where: { id: processingJobId },
+      data: { status: "FAILED", errorSummary: message, completedAt: new Date() },
+    });
+    logger.warn("icp match paused", { brandIcpId: brand.id, pausedUntil: pausedUntil.toISOString() });
+    return;
+  }
 
   await prisma.brandIcp.update({
     where: { id: brand.id },
@@ -476,8 +489,7 @@ async function findAudienceChannels(
     aboveMaximum: 0,
   };
   const daily = Number(process.env.YOUTUBE_DAILY_QUOTA || 10000);
-  const since = new Date();
-  since.setUTCHours(0, 0, 0, 0);
+  const since = youtubeQuotaDayStart();
   const used = await prisma.apiUsage.aggregate({
     _sum: { units: true },
     where: { provider: "youtube", createdAt: { gte: since } },

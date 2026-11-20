@@ -13,7 +13,17 @@ import { YouTubeApiError, createYouTubeClient, matchesSearchCountry, matchesSubs
 import type { SocialProfiles } from "@/lib/youtube/contacts";
 import { discoverYouTubeChannels, topicTier, type DiscoveredChannel, type DiscoveryProgress } from "@/lib/youtube/discovery";
 import { reuseLimit } from "@/lib/youtube/terms";
-import { fillRunBudget, fillWindowStart, isFillPayload, paceYouTubeFetch } from "@/lib/jobs/fill-pool";
+import { youtubeQuotaDayStart } from "@/lib/youtube/quota-day";
+import {
+  FILL_REQUEST_GAP_MS,
+  FILL_SEARCH_CALL_GAP_MS,
+  SEARCH_CALL_GAP_MS,
+  SEARCH_REQUEST_GAP_MS,
+  fillRunBudget,
+  fillWindowStart,
+  isFillPayload,
+  paceYouTubeFetch,
+} from "@/lib/jobs/fill-pool";
 
 async function recordQuota(searchJobId: string, units: number, operation: string, success: boolean, message?: string) {
   await prisma.apiUsage.create({
@@ -137,8 +147,7 @@ export async function runDiscoverCreators(jobId: string) {
       if (reusedCount > 0) await publish({ phase: "saving", scanned: reusedCount, found: reusedCount });
       if (remaining > 0) {
         const daily = Number(process.env.YOUTUBE_DAILY_QUOTA || 10000);
-        const since = new Date();
-        since.setUTCHours(0, 0, 0, 0);
+        const since = youtubeQuotaDayStart();
         const used = await prisma.apiUsage.aggregate({
           _sum: { units: true },
           where: { provider: "youtube", createdAt: { gte: since } },
@@ -158,7 +167,9 @@ export async function runDiscoverCreators(jobId: string) {
         const ceiling = consumed + runBudget;
         if (runBudget > 0) {
           const client = createYouTubeClient(
-            fill ? paceYouTubeFetch(fetch) : fetch,
+            fill
+              ? paceYouTubeFetch(fetch, FILL_REQUEST_GAP_MS, FILL_SEARCH_CALL_GAP_MS)
+              : paceYouTubeFetch(fetch, SEARCH_REQUEST_GAP_MS, SEARCH_CALL_GAP_MS),
             (units, operation, success, message) => {
               consumed += units;
               return recordQuota(search.id, units, operation, success, message);
