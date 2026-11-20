@@ -146,12 +146,20 @@ function googleReason(body: unknown) {
   return String(first.reason ?? error.status ?? "");
 }
 
+/** Waits before retrying a `rateLimitExceeded` response. Google's burst limit clears within minutes. */
+export const RATE_LIMIT_WAITS_MS = [20_000, 45_000, 90_000];
+
+function sleep(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
 export class YouTubeClient {
   constructor(
     private readonly apiKey: string,
     private readonly fetchImpl: YouTubeFetch,
     private readonly onQuota?: QuotaHandler,
     private readonly beforeRequest?: (units: number) => Promise<void> | void,
+    private readonly rateLimitWaitsMs: number[] = RATE_LIMIT_WAITS_MS,
   ) {
     if (!apiKey) {
       throw new YouTubeApiError("YOUTUBE_API_KEY is not configured", "NOT_CONFIGURED");
@@ -159,24 +167,35 @@ export class YouTubeClient {
   }
 
   private async get(path: string, params: Record<string, string | undefined>, operation: keyof typeof COSTS) {
-    await this.beforeRequest?.(COSTS[operation]);
     const url = new URL(`https://www.googleapis.com/youtube/v3/${path}`);
     url.searchParams.set("key", this.apiKey);
     for (const [key, value] of Object.entries(params)) {
       if (value) url.searchParams.set(key, value);
     }
-    let response: Awaited<ReturnType<YouTubeFetch>>;
-    try {
-      response = await this.fetchImpl(url.toString());
-    } catch (error) {
-      await this.onQuota?.(COSTS[operation], operation, false, "network");
-      throw new YouTubeApiError(error instanceof Error ? error.message : "YouTube request failed", "RETRYABLE");
-    }
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) {
+    for (let attempt = 0; ; attempt += 1) {
+      await this.beforeRequest?.(COSTS[operation]);
+      let response: Awaited<ReturnType<YouTubeFetch>>;
+      try {
+        response = await this.fetchImpl(url.toString());
+      } catch (error) {
+        await this.onQuota?.(COSTS[operation], operation, false, "network");
+        throw new YouTubeApiError(error instanceof Error ? error.message : "YouTube request failed", "RETRYABLE");
+      }
+      const body = await response.json().catch(() => ({}));
+      if (response.ok) {
+        await this.onQuota?.(COSTS[operation], operation, true);
+        return body;
+      }
       const reason = googleReason(body);
       const quota = /quota|dailyLimit/i.test(reason);
-      const retryable = quota ? false : response.status === 429 || response.status >= 500 || /rateLimit/i.test(reason);
+      const rateLimited = !quota && /rateLimit/i.test(reason);
+      if (rateLimited && attempt < this.rateLimitWaitsMs.length) {
+        // Google rejected this call without charging it, so log it with 0 units and wait before retrying.
+        await this.onQuota?.(0, operation, false, `${reason} (retry ${attempt + 1})`);
+        await sleep(this.rateLimitWaitsMs[attempt]);
+        continue;
+      }
+      const retryable = quota ? false : response.status === 429 || response.status >= 500 || rateLimited;
       await this.onQuota?.(COSTS[operation], operation, false, reason || String(response.status));
       throw new YouTubeApiError(
         quota
@@ -186,8 +205,6 @@ export class YouTubeClient {
         response.status,
       );
     }
-    await this.onQuota?.(COSTS[operation], operation, true);
-    return body;
   }
 
   async search(input: {
