@@ -4,7 +4,25 @@
  */
 const QUOTA_TIME_ZONE = "America/Los_Angeles";
 
-export function youtubeQuotaDayStart(now = new Date()): Date {
+/**
+ * Start of the YouTube quota window for `now`.
+ * Counting starts at midnight Pacific, or at YOUTUBE_QUOTA_SINCE when a newer API key was put in place.
+ * Rows created before that moment were charged to another project, so they must not count here.
+ */
+export function youtubeQuotaDayStart(now = new Date(), since = process.env.YOUTUBE_QUOTA_SINCE): Date {
+  const dayStart = pacificDayStart(now);
+  const cutoff = parseIsoDate(since);
+  if (cutoff && cutoff > dayStart && cutoff <= now) return cutoff;
+  return dayStart;
+}
+
+function parseIsoDate(value: string | undefined): Date | null {
+  if (!value?.trim()) return null;
+  const date = new Date(value.trim());
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function pacificDayStart(now: Date): Date {
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: QUOTA_TIME_ZONE,
     year: "numeric",
@@ -27,7 +45,5 @@ export function youtubeQuotaDayStart(now = new Date()): Date {
  * Used while the shared YouTube search limit is spent.
  */
 export function icpSearchPausedUntil(value = process.env.ICP_MATCHING_PAUSED_UNTIL): Date | null {
-  if (!value?.trim()) return null;
-  const date = new Date(value.trim());
-  return Number.isNaN(date.getTime()) ? null : date;
+  return parseIsoDate(value);
 }
