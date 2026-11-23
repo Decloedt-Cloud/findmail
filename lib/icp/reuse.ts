@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { logger } from "@/lib/logger";
 import { USABLE_CONTACT } from "@/lib/creators/contact";
 import { ICP_COUNTRIES, ICP_MAX_SUBSCRIBERS, ICP_MIN_SUBSCRIBERS } from "@/lib/icp/audience";
 import { selectCreatorsForIcp } from "@/lib/icp/select-creators";
@@ -25,6 +26,13 @@ export function languageReuseFilter(codes: string[]): Prisma.CreatorWhereInput |
   };
 }
 
+/** The model choice wins. An empty choice keeps the stored channels that already passed the catalog filters. */
+export function catalogCreatorIds(selected: string[], eligibleIds: string[], limit: number) {
+  if (limit <= 0) return [];
+  const source = selected.length > 0 ? selected : eligibleIds;
+  return source.slice(0, limit);
+}
+
 export async function reuseStoredCreators(input: {
   brandIcpId: string;
   brandName: string;
@@ -38,8 +46,8 @@ export async function reuseStoredCreators(input: {
   language?: string | null;
   /** Channels already proposed for another request of this onboarding. */
   excludeCreatorIds?: string[];
-}) {
-  if (input.limit <= 0) return 0;
+}): Promise<{ eligible: number; linked: number }> {
+  if (input.limit <= 0) return { eligible: 0, linked: 0 };
   const requested = input.countries?.length ? input.countries : null;
   const excluded = input.excludeCreatorIds?.filter(Boolean) ?? [];
   const language = languageReuseFilter([...(input.languages ?? []), ...(input.language ? [input.language] : [])]);
@@ -81,19 +89,26 @@ export async function reuseStoredCreators(input: {
           averageViews: creator.averageViews,
         }),
       );
-  if (eligible.length === 0) return 0;
+  if (eligible.length === 0) return { eligible: 0, linked: 0 };
 
-  const ids = await selectCreatorsForIcp({
+  const selected = await selectCreatorsForIcp({
     brandName: input.brandName,
     snapshot: input.snapshot,
     searchQueries: input.searchQueries,
     candidates: eligible,
     limit: input.limit,
   });
-  if (ids.length === 0) return 0;
+  const ids = catalogCreatorIds(selected, eligible.map((creator) => creator.id), input.limit);
   await prisma.icpChannelMatch.createMany({
     data: ids.map((creatorId) => ({ brandIcpId: input.brandIcpId, creatorId })),
     skipDuplicates: true,
   });
-  return prisma.icpChannelMatch.count({ where: { brandIcpId: input.brandIcpId } });
+  const linked = await prisma.icpChannelMatch.count({ where: { brandIcpId: input.brandIcpId } });
+  logger.info("icp catalog reuse", {
+    brandIcpId: input.brandIcpId,
+    eligible: eligible.length,
+    selected: selected.length,
+    linked,
+  });
+  return { eligible: eligible.length, linked };
 }

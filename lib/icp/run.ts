@@ -81,7 +81,7 @@ export async function runMatchIcpChannels(processingJobId: string) {
     for (const link of own) {
       if (link.creator.youtubeChannelId) skipChannelIds.add(link.creator.youtubeChannelId);
     }
-    const linkedTotal = await reuseStoredCreators({
+    const catalog = await reuseStoredCreators({
       brandIcpId: brand.id,
       brandName: brand.brandName,
       snapshot: brand.snapshot,
@@ -92,12 +92,13 @@ export async function runMatchIcpChannels(processingJobId: string) {
       languages,
       excludeCreatorIds: excludedCreatorIds,
     });
-    // `reuseStoredCreators` answers with the row's total, not this run's share.
-    const reused = Math.max(0, linkedTotal - linkedBefore);
+    // `linked` is the row's total, not this run's share.
+    const reused = Math.max(0, catalog.linked - linkedBefore);
     const remaining = Math.max(0, target - reused);
-    const found = remaining > 0
-      ? await findAudienceChannels(analyzed.queries, remaining, countries, skipChannelIds, languages)
-      : { channels: [], inspected: 0, quotaStopped: false };
+    // Stored channels already answer this search. YouTube, and its quota, stay unused.
+    const found = catalog.eligible > 0 || remaining === 0
+      ? { channels: [], inspected: 0, quotaStopped: false }
+      : await findAudienceChannels(analyzed.queries, remaining, countries, skipChannelIds, languages);
     if (reused === 0 && found.channels.length === 0) {
       if (found.quotaStopped) {
         throw new UnrecoverableError(
@@ -137,7 +138,7 @@ export async function runMatchIcpChannels(processingJobId: string) {
       if (created) createdCandidateIds.push(creator.id);
       freshCreators.push(creator);
     }
-    let selectedFresh = await selectCreatorsForIcp({
+    const selectedFresh = await selectCreatorsForIcp({
       brandName: brand.brandName,
       snapshot: brand.snapshot,
       searchQueries: analyzed.queries,
