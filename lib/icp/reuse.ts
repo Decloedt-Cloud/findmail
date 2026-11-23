@@ -7,6 +7,24 @@ import { activeSince, hasEnoughViews } from "@/lib/youtube/qualify";
 
 const CANDIDATE_LIMIT = 150;
 
+/** A requested language keeps a channel that publishes in it, in a regional variant (`en` covers `en-GB`), or whose language was never stored. */
+export function languageReuseFilter(codes: string[]): Prisma.CreatorWhereInput | null {
+  const languages = codes
+    .map((code) => code.trim().toLowerCase())
+    .filter((code, index, list) => code.length > 0 && list.indexOf(code) === index);
+  if (languages.length === 0) return null;
+  return {
+    OR: [
+      { language: null },
+      { language: "" },
+      ...languages.flatMap((code) => [
+        { language: { equals: code, mode: "insensitive" as const } },
+        { language: { startsWith: `${code}-`, mode: "insensitive" as const } },
+      ]),
+    ],
+  };
+}
+
 export async function reuseStoredCreators(input: {
   brandIcpId: string;
   brandName: string;
@@ -14,9 +32,9 @@ export async function reuseStoredCreators(input: {
   searchQueries: string[];
   limit: number;
   countries?: string[];
-  /** ISO 639-1 codes. A chosen list keeps channels that publish in one of them. */
+  /** ISO 639-1 codes. A chosen list keeps channels in one of them, a regional variant, or with no stored language. */
   languages?: string[];
-  /** ISO 639-1. A chosen language keeps channels that publish in it. */
+  /** ISO 639-1. A chosen language keeps channels in it, a regional variant, or with no stored language. */
   language?: string | null;
   /** Channels already proposed for another request of this onboarding. */
   excludeCreatorIds?: string[];
@@ -24,20 +42,13 @@ export async function reuseStoredCreators(input: {
   if (input.limit <= 0) return 0;
   const requested = input.countries?.length ? input.countries : null;
   const excluded = input.excludeCreatorIds?.filter(Boolean) ?? [];
-  const languages = [
-    ...(input.languages ?? []),
-    ...(input.language ? [input.language] : []),
-  ]
-    .map((code) => code.trim())
-    .filter((code, index, list) => code.length > 0 && list.findIndex((item) => item.toLowerCase() === code.toLowerCase()) === index);
+  const language = languageReuseFilter([...(input.languages ?? []), ...(input.language ? [input.language] : [])]);
   const candidates = await prisma.creator.findMany({
     where: {
       hidden: false,
       ...(excluded.length ? { id: { notIn: excluded } } : {}),
       country: { in: requested ?? ICP_COUNTRIES },
-      ...(languages.length
-        ? { OR: languages.map((code) => ({ language: { equals: code, mode: "insensitive" as const } })) }
-        : {}),
+      ...(language ?? {}),
       subscriberVisibility: "PUBLIC",
       subscriberCount: { gte: ICP_MIN_SUBSCRIBERS, lte: ICP_MAX_SUBSCRIBERS },
       channelIcp: { not: Prisma.DbNull },

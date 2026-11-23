@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { ensureFillPoolJob, FILL_CRON } from "@/lib/jobs/fill-pool";
 import { ensurePruneInactiveJob } from "@/lib/jobs/prune-inactive";
+import { failIcpMatchForJob } from "@/lib/icp/fail";
 import { runProcessingJob } from "@/lib/jobs/runner";
 import { QUEUE_NAME, getQueue } from "@/lib/jobs/queue";
 import { getRedis } from "@/lib/redis";
@@ -47,6 +48,9 @@ worker.on("failed", async (job, error) => {
     await prisma.processingJob.updateMany({
       where: { id: String(job.data.processingJobId), status: { in: ["QUEUED", "RUNNING"] } },
       data: { status: "FAILED", errorSummary: error.message.slice(0, 800), completedAt: new Date(), retryCount: job.attemptsMade },
+    });
+    await failIcpMatchForJob(String(job.data.processingJobId), error.message).catch((err) => {
+      logger.error("icp match was not closed", { message: err instanceof Error ? err.message : "unknown" });
     });
   } else {
     await prisma.processingJob.updateMany({
