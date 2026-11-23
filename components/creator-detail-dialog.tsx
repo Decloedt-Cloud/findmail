@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { api } from "@/lib/client";
+import { icpSiteLabel } from "@/lib/icp/identity";
 import { countryName, formatDate, formatDateTime, formatNumber } from "@/lib/utils";
 import type { CreatorRow, EmailRow } from "@/lib/types";
 import { ChannelAvatar } from "@/components/channel-avatar";
@@ -65,7 +66,7 @@ export function CreatorDetailDialog({ creatorId, onClose }: { creatorId: string 
         {creator ? (
           <div className="space-y-4 text-sm">
             <dl className="space-y-2">
-              <Row label="ICP" value={(creator.icps ?? []).map((icp) => icp.brandName).join(", ") || "Not linked"} />
+              <Row label="ICP" value={(creator.icps ?? []).map((icp) => icpSiteLabel(icp.websiteUrl, icp.brandName)).join(", ") || "Not linked"} />
               <Row label="Handle" value={creator.channelHandle || "Not provided"} />
               <Row label="Country" value={countryName(creator.country) || "Not provided by YouTube"} />
               <Row label="Subscribers" value={creator.subscriberVisibility === "PUBLIC" ? formatNumber(creator.subscriberCount) : creator.subscriberVisibility} />

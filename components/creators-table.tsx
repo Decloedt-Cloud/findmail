@@ -6,6 +6,7 @@ import { flexRender } from "@tanstack/react-table";
 import { getCoreRowModel, legacyCreateColumnHelper, useLegacyTable } from "@tanstack/react-table/legacy";
 import { toast } from "sonner";
 import { api } from "@/lib/client";
+import { icpSiteLabel } from "@/lib/icp/identity";
 import { emailStatusLabel } from "@/lib/email/status";
 import { countryName, formatNumber } from "@/lib/utils";
 import type { CreatorRow } from "@/lib/types";
@@ -250,7 +251,7 @@ export function CreatorsTable({ listId, onlyWithEmail = !listId }: { listId?: st
           return (
             <div className="flex max-w-56 min-w-0 flex-col gap-1">
               {icps.map((icp) => (
-                <button key={icp.id} type="button" className="block max-w-56 cursor-pointer truncate text-left hover:underline" title={icp.brandName} onClick={() => setOpenIcpId(icp.id)}>{icp.brandName}</button>
+                <button key={icp.id} type="button" className="block max-w-56 cursor-pointer truncate text-left hover:underline" title={icpSiteLabel(icp.websiteUrl, icp.brandName)} onClick={() => setOpenIcpId(icp.id)}>{icpSiteLabel(icp.websiteUrl, icp.brandName)}</button>
               ))}
             </div>
           );

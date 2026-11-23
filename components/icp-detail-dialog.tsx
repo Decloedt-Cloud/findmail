@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/client";
+import { icpSiteLabel } from "@/lib/icp/identity";
 import type { StoredIcpOffer, StoredIcpProfile } from "@/lib/icp/snapshot";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/feedback";
@@ -46,7 +47,7 @@ export function IcpDetailDialog({ icpId, onClose }: { icpId: string | null; onCl
     <Dialog open={icpId !== null} onOpenChange={(open) => { if (!open) onClose(); }}>
       <DialogContent className="max-h-[min(85vh,44rem)] w-[min(100%-2rem,40rem)] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="pr-8">{icp?.brandName || "ICP"}</DialogTitle>
+          <DialogTitle className="pr-8">{icp ? icpSiteLabel(icp.websiteUrl, icp.brandName) : "ICP"}</DialogTitle>
           <DialogDescription>Simplified ICP used to find matching channels.</DialogDescription>
         </DialogHeader>
         {error ? <p className="text-sm text-destructive">{error}</p> : null}

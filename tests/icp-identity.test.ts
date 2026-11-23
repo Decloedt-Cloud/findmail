@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { icpIdentityKey, uniqueIcpOptions, uniqueIcpsByName } from "@/lib/icp/identity";
+import { icpIdentityKey, icpSiteLabel, uniqueIcpOptions, uniqueIcpsByName, uniqueIcpsBySite } from "@/lib/icp/identity";
 import { chooseIcpMerge } from "@/lib/icp/merge-duplicates";
 
 function row(id: string, status: "COMPLETED" | "FAILED" | "RUNNING", channelCount: number, createdAt: number) {
@@ -35,6 +35,16 @@ describe("icp identity", () => {
     expect(chooseIcpMerge([older, newer])?.drop.map((item) => item.id)).toEqual(["new"]);
     expect(chooseIcpMerge([running, older])?.drop.map((item) => item.id)).toEqual(["old"]);
     expect(chooseIcpMerge([running, { ...running, id: "run-2" }])).toBeNull();
+  });
+
+  it("names an ICP by its site", () => {
+    expect(icpSiteLabel("https://www.vetup.com/pricing", "Vetup")).toBe("vetup.com");
+    expect(icpSiteLabel("", "Vetup")).toBe("Vetup");
+    expect(uniqueIcpsBySite([
+      { id: "a", brandName: "Vetup", websiteUrl: "https://vetup.com" },
+      { id: "b", brandName: "Vetup", websiteUrl: "https://www.vetup.com/" },
+      { id: "c", brandName: "Wayo", websiteUrl: "https://wayo-ads.com" },
+    ]).map((row) => row.id)).toEqual(["a", "c"]);
   });
 
   it("keeps one filter option per brand and site", () => {

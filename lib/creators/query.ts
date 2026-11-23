@@ -1,6 +1,6 @@
 import type { EmailVerificationStatus, Prisma } from "@prisma/client";
 import { readChannelIcp } from "@/lib/icp/channel-icp";
-import { icpHost, icpIdentityKey, uniqueIcpsByName } from "@/lib/icp/identity";
+import { icpHost, icpIdentityKey, uniqueIcpsBySite } from "@/lib/icp/identity";
 import { prisma } from "@/lib/db";
 import { pickPrimaryEmail } from "@/lib/creators/email";
 import { matchesSearchCountry } from "@/lib/youtube/client";
@@ -9,7 +9,7 @@ import { topicTier } from "@/lib/youtube/discovery";
 export const creatorInclude = {
   emails: { orderBy: { discoveredAt: "desc" as const } },
   icpChannels: {
-    select: { brandIcp: { select: { id: true, brandName: true } } },
+    select: { brandIcp: { select: { id: true, brandName: true, websiteUrl: true } } },
     orderBy: { createdAt: "desc" as const },
   },
 } satisfies Prisma.CreatorInclude;
@@ -79,7 +79,7 @@ export function serializeCreator<
   T extends {
     viewCount: bigint | null;
     emails: Parameters<typeof pickPrimaryEmail>[0];
-    icpChannels?: { brandIcp: { id: string; brandName: string } }[];
+    icpChannels?: { brandIcp: { id: string; brandName: string; websiteUrl: string } }[];
   },
 >(creator: T) {
   const { icpChannels, ...rest } = creator;
@@ -88,7 +88,7 @@ export function serializeCreator<
     channelIcp: readChannelIcp("channelIcp" in creator ? creator.channelIcp : null),
     viewCount: creator.viewCount?.toString() ?? null,
     primaryEmail: pickPrimaryEmail(creator.emails),
-    icps: uniqueIcpsByName((icpChannels ?? []).map((link) => link.brandIcp)),
+    icps: uniqueIcpsBySite((icpChannels ?? []).map((link) => link.brandIcp)),
   };
 }
 

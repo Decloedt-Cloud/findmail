@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { api } from "@/lib/client";
+import { icpSiteLabel } from "@/lib/icp/identity";
 import { emailStatusLabel } from "@/lib/email/status";
 import { emailOriginLabel } from "@/lib/creators/email";
 import { countryName, formatDateTime, formatNumber } from "@/lib/utils";
@@ -66,7 +67,7 @@ export default function CreatorDetailPage() {
             <p>Language: {creator.language || "Not provided"}</p>
             <p className="break-words">
               ICP: {(creator.icps ?? []).length > 0
-                ? (creator.icps ?? []).map((icp) => icp.brandName).join(", ")
+                ? (creator.icps ?? []).map((icp) => icpSiteLabel(icp.websiteUrl, icp.brandName)).join(", ")
                 : "Not linked"}
             </p>
             <ChannelIcpSection profile={creator.channelIcp} />

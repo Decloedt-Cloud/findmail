@@ -51,7 +51,7 @@ export type CreatorRow = {
   channelIcp: ChannelIcp | null;
   primaryEmail: EmailRow | null;
   emails?: EmailRow[];
-  icps?: { id: string; brandName: string }[];
+  icps?: { id: string; brandName: string; websiteUrl?: string | null }[];
 };
 
 export type JobRow = {

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { api } from "@/lib/client";
 import { formatAgo, formatCompact } from "@/lib/utils";
+import { icpSiteLabel } from "@/lib/icp/identity";
 import type { CreatorRow } from "@/lib/types";
 import { ChannelAvatar } from "@/components/channel-avatar";
 import { CreatorDetailDialog } from "@/components/creator-detail-dialog";
@@ -151,7 +152,7 @@ export function CreatorResultList({
                   <div className="flex min-w-0 flex-wrap gap-2">
                     {(creator.icps ?? []).map((icp) => (
                       <span key={icp.id} className="max-w-full truncate rounded-full border px-2.5 py-1 text-xs">
-                        ICP · {icp.brandName}
+                        ICP · {icpSiteLabel(icp.websiteUrl, icp.brandName)}
                       </span>
                     ))}
                   </div>

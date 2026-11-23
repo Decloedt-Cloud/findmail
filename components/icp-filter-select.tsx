@@ -2,18 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
+import { icpSiteLabel } from "@/lib/icp/identity";
 import { cn } from "@/lib/utils";
 
 type IcpOption = { id: string; brandName: string; websiteUrl: string };
-
-function icpOptionLabel(brandName: string, websiteUrl: string) {
-  try {
-    const host = new URL(websiteUrl).hostname.replace(/^www\./, "");
-    return `${brandName} · ${host}`;
-  } catch {
-    return brandName;
-  }
-}
 
 export function IcpFilterSelect({
   value,
@@ -59,7 +51,7 @@ export function IcpFilterSelect({
         onClick={() => setOpen((current) => !current)}
       >
         <span className={cn("min-w-0 truncate", selected ? "text-foreground" : "text-muted-foreground")}>
-          {selected ? icpOptionLabel(selected.brandName, selected.websiteUrl) : "Any ICP"}
+          {selected ? icpSiteLabel(selected.websiteUrl, selected.brandName) : "Any ICP"}
         </span>
         <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
       </button>
@@ -77,7 +69,7 @@ export function IcpFilterSelect({
                 className={cn("block w-full cursor-pointer truncate px-3 py-2 text-left text-sm hover:bg-zinc-300 dark:hover:bg-zinc-800", option.id === value && "bg-zinc-300 dark:bg-zinc-800")}
                 onClick={() => choose(option.id)}
               >
-                {icpOptionLabel(option.brandName, option.websiteUrl)}
+                {icpSiteLabel(option.websiteUrl, option.brandName)}
               </button>
             </li>
           ))}
