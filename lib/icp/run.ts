@@ -119,11 +119,20 @@ export async function runMatchIcpChannels(processingJobId: string) {
     const freshCreators = [];
     const createdCandidateIds: string[] = [];
     for (const channel of found.channels) {
-      const { creator, created } = await upsertMatchedChannel(
-        channel.channel,
-        channel.publishedAt,
-        channel.averageViews,
-      );
+      let saved;
+      try {
+        saved = await upsertMatchedChannel(channel.channel, channel.publishedAt, channel.averageViews);
+      } catch (error) {
+        // One channel that cannot be saved must not fail the whole search. It is skipped
+        // and logged, so the other channels of this batch still reach the advertiser.
+        logger.warn("icp channel skipped", {
+          brandIcpId: brand.id,
+          channelId: channel.channel.id,
+          message: error instanceof Error ? error.message.slice(0, 300) : "unknown",
+        });
+        continue;
+      }
+      const { creator, created } = saved;
       if (blocked.has(creator.id)) continue;
       if (created) createdCandidateIds.push(creator.id);
       freshCreators.push(creator);
