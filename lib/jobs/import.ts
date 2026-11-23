@@ -154,7 +154,7 @@ async function channelIcpFor(source: {
   }
 }
 
-async function importRow(row: ImportRow, strategy: DuplicateStrategy) {
+export async function importRow(row: ImportRow, strategy: DuplicateStrategy) {
   let channelId = row.channelId;
   let resolvedName = row.channelName;
   let description: string | null = null;
@@ -197,6 +197,7 @@ async function importRow(row: ImportRow, strategy: DuplicateStrategy) {
       resolvedName = resolvedName || channel.title || null;
       description = channel.description || description;
       thumbnailUrl = thumbnailUrl ?? channel.thumbnailUrl;
+      handle = handle ?? channel.customUrl;
       keywords = channel.keywords;
     }
   }
