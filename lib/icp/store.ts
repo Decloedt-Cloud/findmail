@@ -1,6 +1,8 @@
 import type { Prisma } from "@prisma/client";
 import type { YouTubeChannel } from "@/lib/youtube/client";
 import { prisma, isUniqueViolation } from "@/lib/db";
+import { logger } from "@/lib/logger";
+import { rememberCreatorEmbedding } from "@/lib/icp/vector-search";
 import { AVERAGE_VIEWS_METHOD } from "@/lib/youtube/metrics";
 import { extractPublicContacts } from "@/lib/youtube/contacts";
 
@@ -167,6 +169,11 @@ export async function upsertMatchedChannel(
   };
   const { creator, created } = await writeChannelCreator(channel.id, { ...shared, hidden: false });
   await attachDescriptionContacts(creator.id, channel.description || "");
+  await rememberCreatorEmbedding(creator.id).catch((error) => {
+    logger.warn("channel embedding skipped", {
+      message: error instanceof Error ? error.message.slice(0, 300) : "unknown",
+    });
+  });
   const refreshed = await prisma.creator.findUniqueOrThrow({ where: { id: creator.id } });
   return created
     ? ({ creator: refreshed, created: true } as const)

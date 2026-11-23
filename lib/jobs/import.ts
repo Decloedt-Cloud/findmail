@@ -214,6 +214,13 @@ export async function importRow(row: ImportRow, strategy: DuplicateStrategy) {
   if (existing && strategy === "SKIP") {
     if (icp) await prisma.creator.update({ where: { id: existing.id }, data: { channelIcp: icp } });
     await prisma.dedupEvent.create({ data: { kind: "channel", key: channelId, source: "csv-import" } });
+    const { rememberCreatorEmbedding } = await import("@/lib/icp/vector-search");
+    await rememberCreatorEmbedding(existing.id).catch((error) => {
+      logger.warn("channel embedding skipped", {
+        creatorId: existing.id,
+        message: error instanceof Error ? error.message.slice(0, 300) : "unknown",
+      });
+    });
     return { creatorId: existing.id, duplicate: true };
   }
 
@@ -301,5 +308,12 @@ export async function importRow(row: ImportRow, strategy: DuplicateStrategy) {
       }
     }
   }
+  const { rememberCreatorEmbedding } = await import("@/lib/icp/vector-search");
+  await rememberCreatorEmbedding(creatorId).catch((error) => {
+    logger.warn("channel embedding skipped", {
+      creatorId,
+      message: error instanceof Error ? error.message.slice(0, 300) : "unknown",
+    });
+  });
   return { creatorId, duplicate };
 }

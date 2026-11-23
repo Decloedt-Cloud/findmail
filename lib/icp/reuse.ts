@@ -4,9 +4,12 @@ import { logger } from "@/lib/logger";
 import { USABLE_CONTACT } from "@/lib/creators/contact";
 import { ICP_COUNTRIES, ICP_MAX_SUBSCRIBERS, ICP_MIN_SUBSCRIBERS } from "@/lib/icp/audience";
 import { selectCreatorsForIcp } from "@/lib/icp/select-creators";
+import { embedText } from "@/lib/icp/embed";
+import { nearestStoredCreatorIds } from "@/lib/icp/vector-search";
 import { activeSince, hasEnoughViews } from "@/lib/youtube/qualify";
 
-const CANDIDATE_LIMIT = 150;
+/** How many on-topic channels one DeepSeek call can read. The catalog itself is not cut to this size. */
+const MODEL_CANDIDATE_LIMIT = 40;
 
 /** A requested language keeps a channel that publishes in it, in a regional variant (`en` covers `en-GB`), or whose language was never stored. */
 export function languageReuseFilter(codes: string[]): Prisma.CreatorWhereInput | null {
@@ -74,6 +77,36 @@ export function sharesAdvertiserTopic(advertiser: string, channel: string): bool
   return false;
 }
 
+/** Higher when more distinctive words of the site appear on the channel. A long word counts double. */
+export function topicOverlapScore(advertiser: string, channel: string): number {
+  const wanted = new Set(topicTokens(advertiser));
+  if (wanted.size === 0) return 0;
+  const seen = new Set<string>();
+  let score = 0;
+  for (const word of topicTokens(channel)) {
+    if (!wanted.has(word) || seen.has(word)) continue;
+    seen.add(word);
+    score += word.length >= 7 ? 2 : 1;
+  }
+  return score;
+}
+
+/** On-topic channels, strongest overlap first, cut to what one model call can read. */
+export function rankChannelsForModel<T>(
+  advertiser: string,
+  channels: T[],
+  topicOf: (channel: T) => string,
+  limit: number,
+): T[] {
+  if (limit <= 0) return [];
+  return channels
+    .filter((channel) => sharesAdvertiserTopic(advertiser, topicOf(channel)))
+    .map((channel) => ({ channel, score: topicOverlapScore(advertiser, topicOf(channel)) }))
+    .sort((left, right) => right.score - left.score)
+    .slice(0, limit)
+    .map((row) => row.channel);
+}
+
 function textOf(value: unknown, out: string[], depth = 0) {
   if (depth > 5 || out.length > 40) return;
   if (typeof value === "string") {
@@ -136,38 +169,78 @@ export async function reuseStoredCreators(input: {
   if (input.limit <= 0) return { eligible: 0, linked: 0 };
   const requested = input.countries?.length ? input.countries : null;
   const excluded = input.excludeCreatorIds?.filter(Boolean) ?? [];
-  const language = languageReuseFilter([...(input.languages ?? []), ...(input.language ? [input.language] : [])]);
-  const candidates = await prisma.creator.findMany({
-    where: {
-      hidden: false,
-      ...(excluded.length ? { id: { notIn: excluded } } : {}),
-      country: { in: requested ?? ICP_COUNTRIES },
-      ...(language ?? {}),
-      subscriberVisibility: "PUBLIC",
-      subscriberCount: { gte: ICP_MIN_SUBSCRIBERS, lte: ICP_MAX_SUBSCRIBERS },
-      channelIcp: { not: Prisma.DbNull },
-      ...(requested
-        ? {}
-        : {
-            lastActiveAt: { gte: activeSince() },
-            averageViews: { not: null },
-          }),
-      AND: [USABLE_CONTACT],
-    },
-    orderBy: { updatedAt: "desc" },
-    take: CANDIDATE_LIMIT,
-    select: {
-      id: true,
-      channelName: true,
-      description: true,
-      keywords: true,
-      channelIcp: true,
-      subscriberCount: true,
-      averageViews: true,
-    },
-  });
+  const languageList = [...(input.languages ?? []), ...(input.language ? [input.language] : [])];
+  const language = languageReuseFilter(languageList);
+  const creatorSelect = {
+    id: true,
+    channelName: true,
+    description: true,
+    keywords: true,
+    channelIcp: true,
+    subscriberCount: true,
+    averageViews: true,
+  } as const;
   const onTopic = advertiserTopicText(input.snapshot, input.searchQueries);
-  const eligible = (requested
+  let mode: "vector" | "scan" = "scan";
+  let candidates: Array<{
+    id: string;
+    channelName: string;
+    description: string | null;
+    keywords: string[];
+    channelIcp: unknown;
+    subscriberCount: number | null;
+    averageViews: number | null;
+  }> = [];
+  if (onTopic.trim()) {
+    try {
+      const embedded = await embedText(onTopic);
+      const nearest = await nearestStoredCreatorIds({
+        vector: embedded.vector,
+        model: embedded.model,
+        countries: requested ?? ICP_COUNTRIES,
+        languages: languageList,
+        excludeCreatorIds: excluded,
+        requireRecentActivity: !requested,
+      });
+      if (nearest.status === "hits") {
+        mode = "vector";
+        const rows = await prisma.creator.findMany({
+          where: { id: { in: nearest.ids } },
+          select: creatorSelect,
+        });
+        const order = new Map(nearest.ids.map((id, index) => [id, index]));
+        candidates = rows.sort((left, right) => (order.get(left.id) ?? 0) - (order.get(right.id) ?? 0));
+      } else if (nearest.status === "none") {
+        mode = "vector";
+      }
+    } catch (error) {
+      logger.warn("icp vector search unavailable", {
+        message: error instanceof Error ? error.message.slice(0, 300) : "unknown",
+      });
+    }
+  }
+  if (mode === "scan") {
+    candidates = await prisma.creator.findMany({
+      where: {
+        hidden: false,
+        ...(excluded.length ? { id: { notIn: excluded } } : {}),
+        country: { in: requested ?? ICP_COUNTRIES },
+        ...(language ?? {}),
+        subscriberVisibility: "PUBLIC",
+        subscriberCount: { gte: ICP_MIN_SUBSCRIBERS, lte: ICP_MAX_SUBSCRIBERS },
+        channelIcp: { not: Prisma.DbNull },
+        ...(requested
+          ? {}
+          : {
+              lastActiveAt: { gte: activeSince() },
+              averageViews: { not: null },
+            }),
+        AND: [USABLE_CONTACT],
+      },
+      select: creatorSelect,
+    });
+  }
+  const passingViews = requested
     ? candidates
     : candidates.filter((creator) =>
         hasEnoughViews({
@@ -175,19 +248,46 @@ export async function reuseStoredCreators(input: {
           subscriberVisibility: "PUBLIC",
           averageViews: creator.averageViews,
         }),
-      )
-  ).filter((creator) => sharesAdvertiserTopic(onTopic, channelTopicText(creator)));
-  if (eligible.length === 0) return { eligible: 0, linked: 0 };
+      );
+  const matched = mode === "vector"
+    ? passingViews
+    : passingViews.filter((creator) => sharesAdvertiserTopic(onTopic, channelTopicText(creator)));
+  const ranked = mode === "vector"
+    ? matched.slice(0, MODEL_CANDIDATE_LIMIT)
+    : rankChannelsForModel(onTopic, matched, channelTopicText, MODEL_CANDIDATE_LIMIT);
+  if (ranked.length === 0) {
+    logger.info("icp catalog reuse", {
+      brandIcpId: input.brandIcpId,
+      mode,
+      pool: candidates.length,
+      eligible: matched.length,
+      sent: 0,
+      selected: 0,
+      linked: 0,
+    });
+    return { eligible: matched.length, linked: 0 };
+  }
 
   const selected = await selectCreatorsForIcp({
     brandName: input.brandName,
     snapshot: input.snapshot,
     searchQueries: input.searchQueries,
-    candidates: eligible,
+    candidates: ranked,
     limit: input.limit,
   });
-  const ids = catalogCreatorIds(selected, eligible.map((creator) => creator.id), input.limit);
-  if (ids.length === 0) return { eligible: 0, linked: 0 };
+  const ids = catalogCreatorIds(selected, ranked.map((creator) => creator.id), input.limit);
+  if (ids.length === 0) {
+    logger.info("icp catalog reuse", {
+      brandIcpId: input.brandIcpId,
+      mode,
+      pool: candidates.length,
+      eligible: matched.length,
+      sent: ranked.length,
+      selected: 0,
+      linked: 0,
+    });
+    return { eligible: matched.length, linked: 0 };
+  }
   await prisma.icpChannelMatch.createMany({
     data: ids.map((creatorId) => ({ brandIcpId: input.brandIcpId, creatorId })),
     skipDuplicates: true,
@@ -195,9 +295,12 @@ export async function reuseStoredCreators(input: {
   const linked = await prisma.icpChannelMatch.count({ where: { brandIcpId: input.brandIcpId } });
   logger.info("icp catalog reuse", {
     brandIcpId: input.brandIcpId,
-    eligible: eligible.length,
+    mode,
+    pool: candidates.length,
+    eligible: matched.length,
+    sent: ranked.length,
     selected: selected.length,
     linked,
   });
-  return { eligible: eligible.length, linked };
+  return { eligible: matched.length, linked };
 }

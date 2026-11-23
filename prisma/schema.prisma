@@ -158,6 +158,10 @@ model Creator {
   matchedVideoViews    Int?
   matchedVideoPublishedAt DateTime?
   channelIcp           Json?
+  /// pgvector column written in SQL. The Prisma client does not read it.
+  embedding            Unsupported("vector(768)")?
+  embeddingModel       String?
+  embeddingHash        String?
   relevanceScore       Int                   @default(0)
   hidden               Boolean               @default(false)
   discoveredAt         DateTime              @default(now())

@@ -351,6 +351,13 @@ async function writeMissingChannelIcps(brandIcpId: string, youtubeChannels: YouT
     try {
       const profile = await writeChannelIcp(source);
       await prisma.creator.update({ where: { id: creator.id }, data: { channelIcp: profile } });
+      const { rememberCreatorEmbedding } = await import("@/lib/icp/vector-search");
+      await rememberCreatorEmbedding(creator.id).catch((error) => {
+        logger.warn("channel embedding skipped", {
+          creatorId: creator.id,
+          message: error instanceof Error ? error.message.slice(0, 300) : "unknown",
+        });
+      });
     } catch (error) {
       logger.error("channel icp failed", {
         creatorId: creator.id,
