@@ -11,10 +11,18 @@ export function icpIdentityKey(brandName: string, websiteUrl: string) {
   return `${brandName.trim().toLowerCase()}·${icpHost(websiteUrl)}`;
 }
 
-/** The site is the ICP. The advertiser name is only a fallback when the URL has no host. */
+const PLACEHOLDER_HOST = /(?:^|\.)example\.com$/i;
+
+/** A brief with no website is stored under a synthetic example.com host. It is not a site. */
+export function isPlaceholderSite(websiteUrl: string | null | undefined) {
+  if (!websiteUrl?.trim()) return false;
+  return PLACEHOLDER_HOST.test(icpHost(websiteUrl));
+}
+
+/** The site is the ICP. A missing or synthetic host keeps the advertiser name. */
 export function icpSiteLabel(websiteUrl: string | null | undefined, brandName = "") {
-  const host = websiteUrl ? icpHost(websiteUrl) : "";
-  return host || brandName.trim();
+  if (!websiteUrl || isPlaceholderSite(websiteUrl)) return brandName.trim();
+  return icpHost(websiteUrl) || brandName.trim();
 }
 
 export function uniqueIcpsBySite<T extends { brandName: string; websiteUrl?: string | null }>(icps: T[]): T[] {

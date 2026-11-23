@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { api } from "@/lib/client";
-import { icpSiteLabel } from "@/lib/icp/identity";
+import { icpSiteLabel, isPlaceholderSite } from "@/lib/icp/identity";
 import type { StoredIcpOffer, StoredIcpProfile } from "@/lib/icp/snapshot";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Skeleton } from "@/components/ui/feedback";
@@ -54,10 +54,12 @@ export function IcpDetailDialog({ icpId, onClose }: { icpId: string | null; onCl
         {!icp && !error ? <Skeleton className="h-40" /> : null}
         {icp ? (
           <div className="space-y-5 text-sm">
-            <div>
-              <p className="text-xs font-medium text-muted-foreground">Website</p>
-              <a dir="ltr" className="mt-1 block break-all underline" href={icp.websiteUrl} target="_blank" rel="noreferrer">{icp.websiteUrl}</a>
-            </div>
+            {isPlaceholderSite(icp.websiteUrl) ? null : (
+              <div>
+                <p className="text-xs font-medium text-muted-foreground">Website</p>
+                <a dir="ltr" className="mt-1 block break-all underline" href={icp.websiteUrl} target="_blank" rel="noreferrer">{icp.websiteUrl}</a>
+              </div>
+            )}
             {icp.icps.length === 0 ? <p className="text-muted-foreground">No ICP analysis is stored for this brand.</p> : null}
             {icp.icps.map((profile) => (
               <section key={profile.name} className="space-y-3">

@@ -40,6 +40,7 @@ describe("icp identity", () => {
   it("names an ICP by its site", () => {
     expect(icpSiteLabel("https://www.vetup.com/pricing", "Vetup")).toBe("vetup.com");
     expect(icpSiteLabel("", "Vetup")).toBe("Vetup");
+    expect(icpSiteLabel("https://brief-cmwt3b8ru0015v4j.example.com/", "Hamza ads")).toBe("Hamza ads");
     expect(uniqueIcpsBySite([
       { id: "a", brandName: "Vetup", websiteUrl: "https://vetup.com" },
       { id: "b", brandName: "Vetup", websiteUrl: "https://www.vetup.com/" },
