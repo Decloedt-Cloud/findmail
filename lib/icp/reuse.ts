@@ -26,11 +26,97 @@ export function languageReuseFilter(codes: string[]): Prisma.CreatorWhereInput |
   };
 }
 
-/** The model choice wins. An empty choice keeps the stored channels that already passed the catalog filters. */
-export function catalogCreatorIds(selected: string[], eligibleIds: string[], limit: number) {
-  if (limit <= 0) return [];
-  const source = selected.length > 0 ? selected : eligibleIds;
-  return source.slice(0, limit);
+/**
+ * The model choice is the whole list.
+ *
+ * An empty choice used to keep the most recently stored channels. Those channels
+ * belong to whichever site was matched last, so the next site received the same
+ * off-theme list. No choice means this catalog has nothing for this site.
+ */
+export function catalogCreatorIds(selected: string[], _eligibleIds: string[], limit: number) {
+  if (limit <= 0 || selected.length === 0) return [];
+  return selected.slice(0, limit);
+}
+
+const GENERIC_TOPIC = new Set([
+  "video", "videos", "youtube", "channel", "channels", "content", "creator", "creators",
+  "subscribe", "audience", "people", "online", "business", "marketing", "digital", "social",
+  "media", "brand", "brands", "review", "reviews", "lifestyle", "community", "world",
+  "tips", "guide", "watch", "watching", "about", "their", "they", "have", "more", "best",
+  "with", "from", "this", "that", "your", "pour", "avec", "dans", "cette", "vous",
+  "the", "and", "for", "des", "les", "une", "qui", "que", "est", "par", "sur", "aux",
+]);
+
+/** Distinctive words of a topic. Shared glue ("video", "the", "pour") does not count. */
+export function topicTokens(raw: string): string[] {
+  return raw
+    .toLowerCase()
+    .split(/[^a-z0-9àâäéèêëïîôùûüç]+/i)
+    .map((word) => word.trim())
+    .filter((word) => word.length >= 4 && !GENERIC_TOPIC.has(word));
+}
+
+/**
+ * A stored channel may be offered again only when its audience shares this site's
+ * topic. One long distinctive word, or two shorter ones. Otherwise the catalog is
+ * a list of whoever was saved last.
+ */
+export function sharesAdvertiserTopic(advertiser: string, channel: string): boolean {
+  const wanted = new Set(topicTokens(advertiser));
+  if (wanted.size === 0) return false;
+  let hits = 0;
+  for (const word of topicTokens(channel)) {
+    if (!wanted.has(word)) continue;
+    if (word.length >= 7) return true;
+    hits += 1;
+    if (hits >= 2) return true;
+  }
+  return false;
+}
+
+function textOf(value: unknown, out: string[], depth = 0) {
+  if (depth > 5 || out.length > 40) return;
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (text) out.push(text);
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) textOf(item, out, depth + 1);
+    return;
+  }
+  if (!value || typeof value !== "object") return;
+  for (const child of Object.values(value)) textOf(child, out, depth + 1);
+}
+
+/** The site's topic, from the ICP snapshot and the searches written for it. */
+export function advertiserTopicText(snapshot: unknown, searchQueries: string[]): string {
+  const parts: string[] = [];
+  if (snapshot && typeof snapshot === "object") {
+    const record = snapshot as {
+      matchingText?: unknown;
+      icps?: unknown;
+      offers?: unknown;
+      request?: unknown;
+    };
+    textOf(record.matchingText, parts);
+    textOf(record.icps, parts);
+    textOf(record.offers, parts);
+    textOf(record.request, parts);
+  }
+  textOf(searchQueries, parts);
+  return parts.join(" ");
+}
+
+function channelTopicText(creator: {
+  channelName: string;
+  description: string | null;
+  keywords: string[];
+  channelIcp: unknown;
+}): string {
+  const icp: string[] = [];
+  textOf(creator.channelIcp, icp);
+  return [creator.channelName, creator.description, creator.keywords.join(" "), icp.join(" ")].filter(Boolean).join(" ");
 }
 
 export async function reuseStoredCreators(input: {
@@ -80,7 +166,8 @@ export async function reuseStoredCreators(input: {
       averageViews: true,
     },
   });
-  const eligible = requested
+  const onTopic = advertiserTopicText(input.snapshot, input.searchQueries);
+  const eligible = (requested
     ? candidates
     : candidates.filter((creator) =>
         hasEnoughViews({
@@ -88,7 +175,8 @@ export async function reuseStoredCreators(input: {
           subscriberVisibility: "PUBLIC",
           averageViews: creator.averageViews,
         }),
-      );
+      )
+  ).filter((creator) => sharesAdvertiserTopic(onTopic, channelTopicText(creator)));
   if (eligible.length === 0) return { eligible: 0, linked: 0 };
 
   const selected = await selectCreatorsForIcp({
@@ -99,6 +187,7 @@ export async function reuseStoredCreators(input: {
     limit: input.limit,
   });
   const ids = catalogCreatorIds(selected, eligible.map((creator) => creator.id), input.limit);
+  if (ids.length === 0) return { eligible: 0, linked: 0 };
   await prisma.icpChannelMatch.createMany({
     data: ids.map((creatorId) => ({ brandIcpId: input.brandIcpId, creatorId })),
     skipDuplicates: true,

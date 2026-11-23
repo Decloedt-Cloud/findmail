@@ -16,6 +16,7 @@ function systemPrompt(language: string | null, extra: string[] = []) {
   "The remaining phrases may describe day-to-day work, problems, skills, and goals.",
   "Avoid brand names, domains, software, app, platform, product features, review, tutorial, and demo unless the audience itself watches that exact product category.",
   "Use the ICP name, problems, goals, and interests. Do not name specific channels or people.",
+  "The site theme is the homepage hero. If the ICP also names another theme as an example, a logo, or a blog, search the hero theme only.",
 ].join(" ");
 }
 

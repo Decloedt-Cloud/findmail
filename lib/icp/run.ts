@@ -83,14 +83,15 @@ export async function runMatchIcpChannels(processingJobId: string) {
     // `linked` is the row's total, not this run's share.
     const reused = Math.max(0, catalog.linked - linkedBefore);
     const remaining = Math.max(0, target - reused);
-    // Stored channels already answer this search. The query writer and YouTube stay unused.
+    // A catalog that did not fill this batch has not answered the site. The next
+    // search is written for this ICP. Reusing "whoever was stored last" is not a result.
     let queries = brand.searchQueries;
     let found: Awaited<ReturnType<typeof findAudienceChannels>> = {
       channels: [],
       inspected: 0,
       quotaStopped: false,
     };
-    if (catalog.eligible === 0 && remaining > 0) {
+    if (remaining > 0) {
       const analyzed = await searchQueriesForIcp({
         brandName: brand.brandName,
         websiteUrl: brand.websiteUrl,
