@@ -10,7 +10,7 @@ import {
   matchesIcpAudience,
   regionSearchCodes,
 } from "@/lib/icp/audience";
-import { hasPublicContact } from "@/lib/creators/contact";
+import { hasPublicContact, USABLE_CONTACT } from "@/lib/creators/contact";
 import { writeChannelIcp } from "@/lib/icp/channel-icp";
 import { discoverPublicEmail } from "@/lib/icp/public-email";
 import { UnrecoverableError } from "bullmq";
@@ -51,18 +51,6 @@ export async function runMatchIcpChannels(processingJobId: string) {
 
   try {
     const languages = snapshotSearchLanguages(brand.snapshot);
-    const analyzed = await searchQueriesForIcp({
-      brandName: brand.brandName,
-      websiteUrl: brand.websiteUrl,
-      snapshot: brand.snapshot,
-      language: languages[0] ?? null,
-      languages,
-    });
-    await prisma.brandIcp.update({
-      where: { id: brand.id },
-      data: { searchQueries: analyzed.queries, analysisNote: analyzed.note || null },
-    });
-
     const countries = snapshotCountries(brand.snapshot);
     const target = channelTarget(brand.snapshot);
     const requestId = snapshotRequestId(brand.snapshot);
@@ -85,7 +73,7 @@ export async function runMatchIcpChannels(processingJobId: string) {
       brandIcpId: brand.id,
       brandName: brand.brandName,
       snapshot: brand.snapshot,
-      searchQueries: analyzed.queries,
+      searchQueries: brand.searchQueries,
       limit: target,
       countries,
       language: languages[0] ?? null,
@@ -95,10 +83,28 @@ export async function runMatchIcpChannels(processingJobId: string) {
     // `linked` is the row's total, not this run's share.
     const reused = Math.max(0, catalog.linked - linkedBefore);
     const remaining = Math.max(0, target - reused);
-    // Stored channels already answer this search. YouTube, and its quota, stay unused.
-    const found = catalog.eligible > 0 || remaining === 0
-      ? { channels: [], inspected: 0, quotaStopped: false }
-      : await findAudienceChannels(analyzed.queries, remaining, countries, skipChannelIds, languages);
+    // Stored channels already answer this search. The query writer and YouTube stay unused.
+    let queries = brand.searchQueries;
+    let found: Awaited<ReturnType<typeof findAudienceChannels>> = {
+      channels: [],
+      inspected: 0,
+      quotaStopped: false,
+    };
+    if (catalog.eligible === 0 && remaining > 0) {
+      const analyzed = await searchQueriesForIcp({
+        brandName: brand.brandName,
+        websiteUrl: brand.websiteUrl,
+        snapshot: brand.snapshot,
+        language: languages[0] ?? null,
+        languages,
+      });
+      queries = analyzed.queries;
+      await prisma.brandIcp.update({
+        where: { id: brand.id },
+        data: { searchQueries: analyzed.queries, analysisNote: analyzed.note || null },
+      });
+      found = await findAudienceChannels(analyzed.queries, remaining, countries, skipChannelIds, languages);
+    }
     if (reused === 0 && found.channels.length === 0) {
       if (found.quotaStopped) {
         throw new UnrecoverableError(
@@ -141,7 +147,7 @@ export async function runMatchIcpChannels(processingJobId: string) {
     const selectedFresh = await selectCreatorsForIcp({
       brandName: brand.brandName,
       snapshot: brand.snapshot,
-      searchQueries: analyzed.queries,
+      searchQueries: queries,
       candidates: freshCreators.map((creator) => ({
         id: creator.id,
         channelName: creator.channelName,
@@ -285,9 +291,10 @@ async function completeMatchWithNoChannels(input: {
 async function attachPublicEmails(brandIcpId: string) {
   const pending = await prisma.creator.findMany({
     where: {
-      // Retry NOT_FOUND so a previous empty search does not lock the channel in.
+      // A stored channel already has an email or a social profile. Do not crawl it again.
       emailSearchStatus: { in: ["NOT_SEARCHED", "NOT_FOUND"] },
       icpChannels: { some: { brandIcpId } },
+      NOT: USABLE_CONTACT,
     },
     select: { id: true },
   });
