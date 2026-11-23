@@ -134,6 +134,26 @@ export async function nearestStoredCreatorIds(input: {
   }
 }
 
+/** One vector write. The literal is a bound parameter so it cannot be spliced into the SQL. */
+export async function writeCreatorEmbedding(input: {
+  creatorId: string;
+  vector: number[];
+  model: string;
+  hash: string;
+}): Promise<void> {
+  const literal = `[${input.vector
+    .slice(0, EMBED_DIMS)
+    .map((value) => (Number.isFinite(value) ? value.toFixed(8) : "0"))
+    .join(",")}]`;
+  await prisma.$executeRaw`
+    UPDATE "Creator"
+    SET embedding = CAST(${literal} AS vector),
+        "embeddingModel" = ${input.model},
+        "embeddingHash" = ${input.hash}
+    WHERE id = ${input.creatorId}
+  `;
+}
+
 /** Write the channel vector when its text changed. A failure leaves the previous vector in place. */
 export async function rememberCreatorEmbedding(creatorId: string): Promise<void> {
   const creator = await prisma.creator.findUnique({
@@ -152,11 +172,10 @@ export async function rememberCreatorEmbedding(creatorId: string): Promise<void>
   const embedded = await embedText(text);
   const hash = embeddingContentHash(embedded.model, text);
   if (creator.embeddingModel === embedded.model && creator.embeddingHash === hash) return;
-  await prisma.$executeRaw`
-    UPDATE "Creator"
-    SET embedding = ${vectorLiteral(embedded.vector)},
-        "embeddingModel" = ${embedded.model},
-        "embeddingHash" = ${hash}
-    WHERE id = ${creatorId}
-  `;
+  await writeCreatorEmbedding({
+    creatorId,
+    vector: embedded.vector,
+    model: embedded.model,
+    hash,
+  });
 }
