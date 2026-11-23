@@ -49,7 +49,10 @@ function catalogWhere(input: {
     ? Prisma.sql`(
         c.language IS NULL OR c.language = ''
         OR lower(c.language) IN (${Prisma.join(languages)})
-        OR lower(c.language) LIKE ANY (${Prisma.sql`ARRAY[${Prisma.join(languages.map((code) => `${code}-%`))}]`})
+        OR ${Prisma.join(
+          languages.map((code) => Prisma.sql`lower(c.language) LIKE ${`${code}-%`}`),
+          " OR ",
+        )}
       )`
     : Prisma.sql`TRUE`;
   const excludedSql = excluded.length

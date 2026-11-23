@@ -30,15 +30,20 @@ export function languageReuseFilter(codes: string[]): Prisma.CreatorWhereInput |
 }
 
 /**
- * The model choice is the whole list.
- *
- * An empty choice used to keep the most recently stored channels. Those channels
- * belong to whichever site was matched last, so the next site received the same
- * off-theme list. No choice means this catalog has nothing for this site.
+ * The model choice is the list when it named channels.
+ * An empty choice keeps the channels already ranked for this site: nearest vectors,
+ * or the closest topic overlap. It does not invent a list from the newest rows.
  */
-export function catalogCreatorIds(selected: string[], _eligibleIds: string[], limit: number) {
-  if (limit <= 0 || selected.length === 0) return [];
-  return selected.slice(0, limit);
+export function catalogCreatorIds(selected: string[], eligibleIds: string[], limit: number) {
+  if (limit <= 0) return [];
+  const source = selected.length > 0 ? selected : eligibleIds;
+  const kept: string[] = [];
+  for (const id of source) {
+    if (!id || kept.includes(id)) continue;
+    kept.push(id);
+    if (kept.length >= limit) break;
+  }
+  return kept;
 }
 
 const GENERIC_TOPIC = new Set([

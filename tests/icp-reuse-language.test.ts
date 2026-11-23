@@ -6,8 +6,8 @@ describe("catalogCreatorIds", () => {
     expect(catalogCreatorIds(["a", "b"], ["a", "b", "c"], 2)).toEqual(["a", "b"]);
   });
 
-  it("keeps nothing when the model kept none", () => {
-    expect(catalogCreatorIds([], ["a", "b", "c"], 2)).toEqual([]);
+  it("keeps the ranked channels when the model kept none", () => {
+    expect(catalogCreatorIds([], ["a", "b", "c"], 2)).toEqual(["a", "b"]);
   });
 });
 
