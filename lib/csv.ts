@@ -9,8 +9,24 @@ export type CsvField =
   | "email"
   | "ignore";
 
+/** French Excel exports use ";" and some tools use tabs. Pick whichever the header line uses most. */
+export function detectDelimiter(text: string): string {
+  const firstLine = text.split(/\r?\n/, 1)[0] ?? "";
+  let best = ",";
+  let bestCount = 0;
+  for (const delimiter of [",", ";", "\t"]) {
+    const count = firstLine.split(delimiter).length - 1;
+    if (count > bestCount) {
+      best = delimiter;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
 export function parseCsv(input: string): string[][] {
   const text = input.replace(/^\uFEFF/, "");
+  const delimiter = detectDelimiter(text);
   const rows: string[][] = [];
   let row: string[] = [];
   let cell = "";
@@ -35,7 +51,7 @@ export function parseCsv(input: string): string[][] {
       inQuotes = true;
       continue;
     }
-    if (char === ",") {
+    if (char === delimiter) {
       row.push(cell);
       cell = "";
       continue;
@@ -103,12 +119,30 @@ const HEADER_ALIASES: Record<string, CsvField> = {
   email: "email",
   business_email: "email",
   contact_email: "email",
+  // French headers (accents are stripped before lookup, see normalizeHeader).
+  chaine_youtube: "channel_url",
+  chaine: "channel_url",
+  createur: "channel_name",
+  abonnes: "subscriber_count",
+  abonnes_releves: "subscriber_count",
+  email_professionnel_public: "email",
+  site_web: "website_url",
+  site: "website_url",
 };
+
+function normalizeHeader(header: string) {
+  return header
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_");
+}
 
 export function suggestMapping(headers: string[]): Record<number, CsvField> {
   const mapping: Record<number, CsvField> = {};
   headers.forEach((header, index) => {
-    const key = header.trim().toLowerCase().replace(/[\s-]+/g, "_");
+    const key = normalizeHeader(header);
     mapping[index] = HEADER_ALIASES[key] ?? "ignore";
   });
   return mapping;

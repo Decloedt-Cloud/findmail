@@ -8,6 +8,15 @@ import { ensureDataDirs, paths } from "@/lib/paths";
 
 const MAX_BYTES = Number(process.env.MAX_UPLOAD_BYTES || 5_242_880);
 
+/** Excel on Windows often saves CSV as Windows-1252 rather than UTF-8. Try UTF-8 first, then fall back. */
+function decodeCsv(bytes: Buffer): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return new TextDecoder("windows-1252").decode(bytes);
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const user = await requireUser();
@@ -18,7 +27,7 @@ export async function POST(request: Request) {
     if (file.size <= 0) throw new ApiError(400, "The CSV file is empty");
     if (file.size > MAX_BYTES) throw new ApiError(413, "CSV files must be 5 MB or smaller");
     if (!file.name.toLowerCase().endsWith(".csv")) throw new ApiError(400, "Only .csv files are supported");
-    const text = await file.text();
+    const text = decodeCsv(Buffer.from(await file.arrayBuffer()));
     if (text.includes("\0")) throw new ApiError(400, "The file does not look like a CSV");
     const table = parseCsv(text);
     if (table.length < 2) throw new ApiError(400, "The CSV needs a header row and at least one data row");
