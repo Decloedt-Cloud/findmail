@@ -3,6 +3,27 @@ import { findInFileDuplicates, mapImportRows, parseCsv, suggestMapping, toCsv } 
 import { exportCells } from "@/lib/jobs/export";
 
 describe("csv import", () => {
+  it("reads semicolon-separated exports from French Excel", () => {
+    const table = parseCsv("Créateur;Chaîne YouTube;Abonnés relevés\nAda;https://www.youtube.com/@ada;1200\n");
+    expect(table[0]).toEqual(["Créateur", "Chaîne YouTube", "Abonnés relevés"]);
+    const mapped = mapImportRows(table, suggestMapping(table[0] ?? []));
+    expect(mapped.rows[0]?.channelUrl).toBe("https://www.youtube.com/@ada");
+    expect(mapped.rows[0]?.subscriberCount).toBe(1200);
+  });
+
+  it("maps French spreadsheet headers to import fields", () => {
+    const table = parseCsv("Créateur,Chaîne YouTube,Abonnés relevés,Email professionnel public,Pays / implantation\nFrenchHardware,https://www.youtube.com/@frhardware,878000,contact@example.fr,Belgique\n");
+    const mapping = suggestMapping(table[0] ?? []);
+    expect(Object.values(mapping)).toContain("channel_url");
+    const mapped = mapImportRows(table, mapping);
+    expect(mapped.rows[0]?.channelName).toBe("FrenchHardware");
+    expect(mapped.rows[0]?.channelUrl).toBe("https://www.youtube.com/@frhardware");
+    expect(mapped.rows[0]?.subscriberCount).toBe(878000);
+    expect(mapped.rows[0]?.email).toBe("contact@example.fr");
+    // Free-text country names are not auto-mapped: they would fail the 2-letter ISO check.
+    expect(mapped.rows[0]?.country).toBeNull();
+  });
+
   it("maps flexible headers and reports duplicate channel ids", () => {
     const table = parseCsv("Channel Name,Subscribers,Email\nAda,1000,ada@brand.com\n");
     const mapping = suggestMapping(table[0] ?? []);

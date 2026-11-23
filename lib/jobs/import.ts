@@ -8,7 +8,9 @@ import { prisma, isUniqueViolation } from "@/lib/db";
 import { isCancelled, markRunning, recordJobError, refreshJobCounts, updateProgress } from "@/lib/jobs/progress";
 import { ensureDataDirs, paths } from "@/lib/paths";
 import { assertPublicHttpUrl } from "@/lib/ssrf";
-import { YouTubeApiError, createYouTubeClient, parseYouTubeReference } from "@/lib/youtube/client";
+import { writeChannelIcp } from "@/lib/icp/channel-icp";
+import { logger } from "@/lib/logger";
+import { YouTubeApiError, createYouTubeClient, parseYouTubeReference, type YouTubeClient } from "@/lib/youtube/client";
 
 type StoredRow = { input?: ImportRow };
 
@@ -133,33 +135,83 @@ function validateRow(row: ImportRow) {
   return null;
 }
 
+async function channelIcpFor(source: {
+  id: string;
+  title: string;
+  description: string;
+  keywords: string[];
+  country: string | null;
+}) {
+  try {
+    return await writeChannelIcp(source);
+  } catch (error) {
+    // An ICP failure must not block the channel itself from being imported.
+    logger.error("csv import channel icp failed", {
+      channelId: source.id,
+      message: error instanceof Error ? error.message : "unknown",
+    });
+    return null;
+  }
+}
+
 async function importRow(row: ImportRow, strategy: DuplicateStrategy) {
   let channelId = row.channelId;
   let resolvedName = row.channelName;
   let description: string | null = null;
   let thumbnailUrl: string | null = null;
   let handle: string | null = null;
+  let keywords: string[] = [];
+  let detailsLoaded = false;
+  let client: YouTubeClient | null = null;
+  const youtube = () => {
+    client ??= createYouTubeClient(fetch, async (units, operation, success, message) => {
+      await prisma.apiUsage.create({ data: { provider: "youtube", operation, units, success, message } });
+    });
+    return client;
+  };
   const reference = parseYouTubeReference(row.channelUrl || row.videoUrl || row.channelId || "");
   if (!channelId && reference.channelId) channelId = reference.channelId;
   if (!channelId && (reference.videoId || reference.handle)) {
-    const client = createYouTubeClient(fetch, async (units, operation, success, message) => {
-      await prisma.apiUsage.create({ data: { provider: "youtube", operation, units, success, message } });
-    });
-    if (reference.videoId) channelId = await client.channelIdForVideo(reference.videoId);
+    if (reference.videoId) channelId = await youtube().channelIdForVideo(reference.videoId);
     if (!channelId && reference.handle) {
-      const channel = await client.channelForHandle(reference.handle);
+      const channel = await youtube().channelForHandle(reference.handle);
       channelId = channel?.id ?? null;
       resolvedName = resolvedName || channel?.title || null;
       description = channel?.description ?? null;
       thumbnailUrl = channel?.thumbnailUrl ?? null;
       handle = channel?.customUrl ?? reference.handle;
+      keywords = channel?.keywords ?? [];
+      detailsLoaded = Boolean(channel);
     }
   }
   if (!channelId) throw new Error("Could not determine a YouTube channel id");
   handle = handle ?? reference.handle ?? null;
 
   const existing = await prisma.creator.findUnique({ where: { youtubeChannelId: channelId } });
+  // ICP is needed for new channels, for existing channels without one, and when UPDATE refreshes them.
+  const needsIcp = !existing?.channelIcp || strategy === "UPDATE";
+  if (needsIcp && !detailsLoaded) {
+    // The CSV has no description or keywords, so read them from YouTube to build the ICP.
+    const [channel] = await youtube().listChannels([channelId]);
+    if (channel) {
+      resolvedName = resolvedName || channel.title || null;
+      description = channel.description || description;
+      thumbnailUrl = thumbnailUrl ?? channel.thumbnailUrl;
+      keywords = channel.keywords;
+    }
+  }
+  const icp = needsIcp
+    ? await channelIcpFor({
+        id: channelId,
+        title: resolvedName || channelId,
+        description: description ?? "",
+        keywords,
+        country: row.country,
+      })
+    : null;
+
   if (existing && strategy === "SKIP") {
+    if (icp) await prisma.creator.update({ where: { id: existing.id }, data: { channelIcp: icp } });
     await prisma.dedupEvent.create({ data: { kind: "channel", key: channelId, source: "csv-import" } });
     return { creatorId: existing.id, duplicate: true };
   }
@@ -180,6 +232,7 @@ async function importRow(row: ImportRow, strategy: DuplicateStrategy) {
     websiteEvidence: website ? "Website URL supplied in the imported CSV." : null,
     discoverySource: "CSV_IMPORT" as const,
     discoveredAt: new Date(),
+    channelIcp: icp ?? undefined,
   };
 
   let creatorId: string;
@@ -217,7 +270,7 @@ async function importRow(row: ImportRow, strategy: DuplicateStrategy) {
           websiteStatus: website ? ("FOUND" as const) : existing.websiteStatus,
           websiteEvidence: website ? createData.websiteEvidence : existing.websiteEvidence,
         };
-    await prisma.creator.update({ where: { id: existing.id }, data: merged });
+    await prisma.creator.update({ where: { id: existing.id }, data: { ...merged, channelIcp: icp ?? undefined } });
     creatorId = existing.id;
   }
 
