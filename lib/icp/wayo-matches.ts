@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { USABLE_CONTACT, hasPublicContact } from "@/lib/creators/contact";
 import { usablePublicEmails } from "@/lib/creators/email";
 import { prisma } from "@/lib/db";
@@ -66,7 +67,27 @@ export async function listWayoIcpMatches(input: {
     : rows;
   /* The onboarding row is reused when the advertiser enters another URL. The
      previous site's channels stay stored, and they must not fill the new search. */
-  const brand = forRequest.find((row) => sameSite(row.websiteUrl, input.website)) ?? null;
+  let brand = forRequest.find((row) => sameSite(row.websiteUrl, input.website)) ?? null;
+  /* A finished search started before this request existed has the channels and
+     no request id. Claim it for the request that is asking, so the page can
+     show them instead of starting another search. */
+  if (!brand && input.requestId) {
+    const unscoped = rows.find(
+      (row) =>
+        sameSite(row.websiteUrl, input.website) &&
+        !snapshotRequestId(row.snapshot) &&
+        row.matchedChannelCount > 0 &&
+        (row.status === "COMPLETED" || row.status === "PARTIALLY_COMPLETED"),
+    );
+    if (unscoped && unscoped.snapshot && typeof unscoped.snapshot === "object") {
+      const snapshot = { ...(unscoped.snapshot as Record<string, unknown>), requestId: input.requestId };
+      await prisma.brandIcp.update({
+        where: { id: unscoped.id },
+        data: { snapshot: snapshot as Prisma.InputJsonValue },
+      });
+      brand = { ...unscoped, snapshot };
+    }
+  }
   if (!brand) {
     return { id: null, status: "MISSING" as const, creators: [] };
   }
