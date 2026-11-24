@@ -62,7 +62,7 @@ export async function runPruneInactiveChannels(jobId: string) {
   };
   let cursor = readCursor(job.payload);
   let processed = job.processedRecords;
-  let removed = job.successCount;
+  const removed = job.successCount;
   let skipped = job.failureCount;
   const remaining = await prisma.creator.count({
     where: cursor ? { AND: [{ id: { gt: cursor } }, due] } : due,
@@ -99,11 +99,8 @@ export async function runPruneInactiveChannels(jobId: string) {
               data: { lastActiveAt: published, recentVideoPublishedAt: published, lastMetadataSyncAt: new Date() },
             });
           }
-        } else {
-          await prisma.jobItem.updateMany({ where: { creatorId: creator.id }, data: { creatorId: null } });
-          await prisma.creator.delete({ where: { id: creator.id } });
-          removed += 1;
         }
+        // Inactive or missing channels are kept on purpose: this sweep never deletes creators.
         processed += 1;
         cursor = creator.id;
       }
