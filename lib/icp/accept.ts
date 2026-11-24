@@ -110,8 +110,19 @@ function snapshotRounds(snapshot: unknown) {
   return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 1;
 }
 
-function isHealthyIcp(row: { status: string; matchedChannelCount: number }) {
-  return row.status === "QUEUED" || row.status === "RUNNING" || (row.status === "COMPLETED" && row.matchedChannelCount > 0);
+/** A search that started moments ago is still the current one. An older queue is stuck. */
+const ACTIVE_SEARCH_MS = 10 * 60 * 1000;
+
+function searchStillRunning(row: { status: string; updatedAt: Date }) {
+  if (row.status !== "QUEUED" && row.status !== "RUNNING") return false;
+  return Date.now() - row.updatedAt.getTime() < ACTIVE_SEARCH_MS;
+}
+
+function searchAlreadyFilled(row: { status: string; matchedChannelCount: number }) {
+  return (
+    (row.status === "COMPLETED" || row.status === "PARTIALLY_COMPLETED") &&
+    row.matchedChannelCount > 0
+  );
 }
 
 async function findBrandCopies(brandName: string, websiteUrl: string) {
@@ -154,16 +165,13 @@ export async function acceptWayoIcp(input: IcpInput) {
     }
     const requestedLanguages = normalizeSearchLanguages([...(input.languages ?? []), input.language]);
     const requestedCountries = [...new Set((input.countries ?? []).map((code) => code.toUpperCase()))];
-    /* An identical search that already finished, failed, or is running is not
-       started again. A different country or language still queues a new one. */
+    /* The same countries and languages keep a search that is still running, or one
+       that already found channels. A failed, empty, or stuck search starts again. */
     if (
       same &&
       sameCodeList(snapshotCountries(same.snapshot), requestedCountries) &&
       sameCodeList(snapshotSearchLanguages(same.snapshot), requestedLanguages) &&
-      (isHealthyIcp(same) ||
-        same.status === "COMPLETED" ||
-        same.status === "PARTIALLY_COMPLETED" ||
-        same.status === "FAILED")
+      (searchStillRunning(same) || searchAlreadyFilled(same))
     ) {
       return { id: same.id, status: same.status, queued: false as const };
     }
