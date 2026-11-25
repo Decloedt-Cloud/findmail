@@ -345,6 +345,7 @@ async function attachReusableCreators(
       description: true,
       country: true,
       discoveryRegion: true,
+      contentCountries: true,
       subscriberCount: true,
       subscriberVisibility: true,
       lastActiveAt: true,

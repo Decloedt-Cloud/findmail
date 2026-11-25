@@ -61,13 +61,17 @@ describe("languageReuseFilter", () => {
     expect(languageReuseFilter(["", "  "])).toBeNull();
   });
 
-  it("keeps a regional variant and a channel with no language stored", () => {
+  it("keeps a regional variant and leaves a channel with no language for a YouTube read", () => {
     expect(languageReuseFilter(["en", "EN"])).toEqual({
       OR: [
         { language: { equals: "en", mode: "insensitive" } },
+        { language: { startsWith: "en,", mode: "insensitive" } },
+        { language: { endsWith: ",en", mode: "insensitive" } },
+        { language: { contains: ",en,", mode: "insensitive" } },
         { language: { startsWith: "en-", mode: "insensitive" } },
-        { language: null },
-        { language: "" },
+        { language: { contains: ",en-", mode: "insensitive" } },
+        { languageCheckedAt: null },
+        { languageReadVersion: { lt: 2 } },
       ],
     });
   });

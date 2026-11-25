@@ -110,14 +110,14 @@ export async function listWayoIcpMatches(input: {
   const languages = snapshotSearchLanguages(brand.snapshot);
   const languageWhere = isSpecificLanguageChoice(languages)
     ? {
-        OR: [
-          ...languages.flatMap((code) => [
-            { language: { equals: code, mode: "insensitive" as const } },
-            { language: { startsWith: `${code}-`, mode: "insensitive" as const } },
-          ]),
-          { language: null },
-          { language: "" },
-        ],
+        OR: languages.flatMap((code) => [
+          { language: { equals: code, mode: "insensitive" as const } },
+          { language: { startsWith: `${code},`, mode: "insensitive" as const } },
+          { language: { endsWith: `,${code}`, mode: "insensitive" as const } },
+          { language: { contains: `,${code},`, mode: "insensitive" as const } },
+          { language: { startsWith: `${code}-`, mode: "insensitive" as const } },
+          { language: { contains: `,${code}-`, mode: "insensitive" as const } },
+        ]),
       }
     : null;
   const links = await prisma.icpChannelMatch.findMany({
@@ -132,7 +132,15 @@ export async function listWayoIcpMatches(input: {
           ...(languageWhere ? [languageWhere] : []),
           ...(countries.length
             ? [{
-                OR: countries.map((code) => ({ country: { equals: code, mode: "insensitive" as const } })),
+                OR: [
+                  ...countries.map((code) => ({ country: { equals: code, mode: "insensitive" as const } })),
+                  ...countries.flatMap((code) => [
+                    { contentCountries: { equals: code, mode: "insensitive" as const } },
+                    { contentCountries: { startsWith: `${code},`, mode: "insensitive" as const } },
+                    { contentCountries: { endsWith: `,${code}`, mode: "insensitive" as const } },
+                    { contentCountries: { contains: `,${code},`, mode: "insensitive" as const } },
+                  ]),
+                ],
               }]
             : []),
         ],

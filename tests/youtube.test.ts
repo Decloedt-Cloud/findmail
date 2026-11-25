@@ -516,6 +516,8 @@ describe("youtube pagination and dedupe", () => {
     expect(matchesSearchCountry({ country: null, discoveryRegion: "FR" }, ["FR"])).toBe(false);
     expect(matchesSearchCountry({ country: "FR", discoveryRegion: "US" }, ["FR"])).toBe(true);
     expect(matchesSearchCountry({ country: "US", discoveryRegion: "FR" }, ["FR"])).toBe(false);
+    expect(matchesSearchCountry({ country: "US", contentCountries: "FR" }, ["FR"])).toBe(true);
+    expect(matchesSearchCountry({ country: "US", contentCountries: "" }, ["FR"])).toBe(false);
     expect(matchesSubscriberRange("HIDDEN", null, 1000, null)).toBe(false);
     expect(matchesSubscriberRange("PUBLIC", 1500, 1000, 2000)).toBe(true);
   });

@@ -1,13 +1,10 @@
-/** A real language choice is a short list. The full "all languages" set is not one. */
+/** Any chosen language filters. An empty list does not. */
 export function isSpecificLanguageChoice(codes: string[]): boolean {
-  return codes.length > 0 && codes.length <= 6;
+  return codes.length > 0;
 }
 
-function languageCode(value: string | null | undefined): string | null {
-  if (!value) return null;
-  const code = value.trim().toLowerCase().slice(0, 2);
-  return /^[a-z]{2}$/.test(code) ? code : null;
-}
+/** Bump this when the reading rules change, so a stored language is read again. */
+export const LANGUAGE_READ_VERSION = 2;
 
 type WordScore = { lang: string; points: number };
 
@@ -115,24 +112,24 @@ export function languageFromTitle(title: string): string | null {
 
 export type SpokenVideo = {
   title: string;
+  description?: string | null;
+  /** Viewer comments. They do not decide the channel's language. */
+  comments?: string[] | null;
+  /** Comments the channel itself wrote. */
+  creatorComments?: string[] | null;
   defaultLanguage?: string | null;
   defaultAudioLanguage?: string | null;
 };
 
-/** Language of one video: the title first, then the language YouTube stored. */
-export function videoSpokenLanguage(video: SpokenVideo): string | null {
-  return languageFromTitle(video.title) ?? languageCode(video.defaultAudioLanguage) ?? languageCode(video.defaultLanguage);
+/** The creator's own blurb. Links and the gear list below it are left out. */
+function descriptionText(value: string | null | undefined): string {
+  if (!value) return "";
+  return value.replace(/https?:\/\/\S+/gi, " ").slice(0, 5000);
 }
 
-/**
- * Language a channel publishes in, read from recent titles.
- * Two titles must agree, and one language must lead. One title, a tie, or
- * titles with no words we recognise is no language.
- */
-export function channelSpokenLanguage(videos: SpokenVideo[]): string | null {
+function majority(codes: Array<string | null>, minimum = 2): string | null {
   const counts = new Map<string, number>();
-  for (const video of videos) {
-    const code = languageFromTitle(video.title);
+  for (const code of codes) {
     if (!code) continue;
     counts.set(code, (counts.get(code) ?? 0) + 1);
   }
@@ -146,6 +143,78 @@ export function channelSpokenLanguage(videos: SpokenVideo[]): string | null {
       tied = false;
     } else if (count === bestCount) tied = true;
   }
-  if (!best || tied || bestCount < 2) return null;
+  if (!best || tied || bestCount < minimum) return null;
   return best;
+}
+
+/** Language of one video: the title, then its description, then its comments. */
+export function videoSpokenLanguage(video: SpokenVideo): string | null {
+  return (
+    languageFromTitle(video.title) ??
+    languageFromTitle(descriptionText(video.description)) ??
+    majority((video.comments ?? []).map((comment) => languageFromTitle(comment)))
+  );
+}
+
+function languagesAtLeast(codes: Array<string | null>, minimum = 2): string[] {
+  const counts = new Map<string, number>();
+  for (const code of codes) {
+    if (!code) continue;
+    counts.set(code, (counts.get(code) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .filter(([, count]) => count >= minimum)
+    .map(([code]) => code)
+    .sort();
+}
+
+function spokenLanguageCounts(videos: SpokenVideo[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const video of videos) {
+    const codes = [
+      languageFromTitle(video.title),
+      languageFromTitle(descriptionText(video.description)),
+      ...(video.creatorComments ?? []).map((comment) => languageFromTitle(comment)),
+    ];
+    for (const code of codes) {
+      if (!code) continue;
+      counts.set(code, (counts.get(code) ?? 0) + 1);
+    }
+  }
+  return counts;
+}
+
+/**
+ * Every language the channel publishes in.
+ * One text is enough, including a second language. Viewer comments are not used.
+ */
+export function channelSpokenLanguages(videos: SpokenVideo[]): string[] {
+  return [...spokenLanguageCounts(videos).keys()].sort();
+}
+
+/** A found language is final. A long sample that found nothing is final too. */
+export function channelLanguageRead(videos: SpokenVideo[]): { language: string | null; conclusive: boolean } {
+  let examined = 0;
+  for (const video of videos) {
+    if (video.title.trim()) examined += 1;
+    if (descriptionText(video.description).trim()) examined += 1;
+  }
+  const language = channelSpokenLanguage(videos);
+  return { language, conclusive: Boolean(language) || examined >= 12 };
+}
+
+/** Languages joined for storage (`en,fr`). Null when none were confirmed. */
+export function channelSpokenLanguage(videos: SpokenVideo[]): string | null {
+  const codes = channelSpokenLanguages(videos);
+  return codes.length > 0 ? codes.join(",") : null;
+}
+
+/** True when a stored list (`fr` or `en,fr`) contains one requested code. */
+export function storedLanguageCovers(stored: string | null | undefined, requested: string[]): boolean {
+  if (!stored) return false;
+  const have = stored
+    .toLowerCase()
+    .split(/[^a-z]+/)
+    .filter((code) => code.length === 2);
+  return have.some((code) => requested.includes(code));
 }

@@ -1,3 +1,5 @@
+import { storedCountriesCover } from "@/lib/youtube/content-country";
+
 export type YouTubeSearchItem = {
   kind: "channel" | "video";
   channelId: string;
@@ -50,7 +52,7 @@ export class YouTubeApiError extends Error {
 
 type QuotaHandler = (units: number, operation: string, success: boolean, message?: string) => Promise<void> | void;
 
-const COSTS = { search: 100, channels: 1, videos: 1, playlistItems: 1 } as const;
+const COSTS = { search: 100, channels: 1, videos: 1, playlistItems: 1, commentThreads: 1 } as const;
 
 export function dedupeIds(ids: string[]) {
   const seen = new Set<string>();
@@ -88,10 +90,11 @@ export function matchesDeclaredCountry(channelCountry: string | null, requested:
 }
 
 export function matchesSearchCountry(
-  creator: { country: string | null; discoveryRegion?: string | null },
+  creator: { country: string | null; discoveryRegion?: string | null; contentCountries?: string | null },
   requested: string[],
 ) {
-  return matchesDeclaredCountry(creator.country, requested);
+  if (matchesDeclaredCountry(creator.country, requested)) return true;
+  return storedCountriesCover(creator.contentCountries, requested);
 }
 
 export function parseYouTubeReference(value: string) {
@@ -289,49 +292,105 @@ export class YouTubeClient {
   }
 
   async listUploads(playlistId: string, maxResults = 20) {
-    const body = asRecord(
-      await this.get(
-        "playlistItems",
-        {
-          part: "snippet,contentDetails",
-          playlistId,
-          maxResults: String(Math.min(50, Math.max(1, maxResults))),
-        },
-        "playlistItems",
-      ),
-    );
+    const wanted = Math.min(200, Math.max(1, maxResults));
     const items: { videoId: string; title: string; publishedAt: string | null }[] = [];
-    for (const item of Array.isArray(body.items) ? body.items : []) {
-      const record = asRecord(item);
-      const content = asRecord(record.contentDetails);
-      const snippet = asRecord(record.snippet);
-      const resource = asRecord(snippet.resourceId);
-      const videoId = String(content.videoId ?? resource.videoId ?? "");
-      if (!videoId) continue;
-      const published = content.videoPublishedAt ?? snippet.publishedAt;
-      items.push({
-        videoId,
-        title: String(snippet.title ?? ""),
-        publishedAt: typeof published === "string" ? published : null,
-      });
+    let pageToken = "";
+    while (items.length < wanted) {
+      const body = asRecord(
+        await this.get(
+          "playlistItems",
+          {
+            part: "snippet,contentDetails",
+            playlistId,
+            maxResults: String(Math.min(50, wanted - items.length)),
+            ...(pageToken ? { pageToken } : {}),
+          },
+          "playlistItems",
+        ),
+      );
+      for (const item of Array.isArray(body.items) ? body.items : []) {
+        const record = asRecord(item);
+        const content = asRecord(record.contentDetails);
+        const snippet = asRecord(record.snippet);
+        const resource = asRecord(snippet.resourceId);
+        const videoId = String(content.videoId ?? resource.videoId ?? "");
+        if (!videoId) continue;
+        const published = content.videoPublishedAt ?? snippet.publishedAt;
+        items.push({
+          videoId,
+          title: String(snippet.title ?? ""),
+          publishedAt: typeof published === "string" ? published : null,
+        });
+      }
+      pageToken = typeof body.nextPageToken === "string" ? body.nextPageToken : "";
+      if (!pageToken) break;
     }
     return items;
   }
 
   async listVideos(ids: string[]) {
     if (ids.length === 0) return [];
+    const videos = [];
+    for (let index = 0; index < ids.length; index += 50) {
+      videos.push(...(await this.listVideoPage(ids.slice(index, index + 50))));
+    }
+    return videos;
+  }
+
+  private async listVideoPage(ids: string[]) {
     const body = asRecord(
       await this.get(
         "videos",
         {
           part: "snippet,statistics,status,contentDetails",
-          id: ids.slice(0, 50).join(","),
+          id: ids.join(","),
           maxResults: "50",
         },
         "videos",
       ),
     );
     return (Array.isArray(body.items) ? body.items : []).map((item) => mapVideo(item));
+  }
+
+  /** Comments the channel wrote on its own video. Viewer comments are left out. */
+  async listCommentTexts(videoId: string, maxResults = 20): Promise<string[]> {
+    try {
+      const body = asRecord(
+        await this.get(
+          "commentThreads",
+          {
+            part: "snippet,replies",
+            videoId,
+            maxResults: String(Math.min(20, Math.max(1, maxResults))),
+            order: "relevance",
+            textFormat: "plainText",
+          },
+          "commentThreads",
+        ),
+      );
+      const texts: string[] = [];
+      for (const item of Array.isArray(body.items) ? body.items : []) {
+        const thread = asRecord(item);
+        const threadSnippet = asRecord(thread.snippet);
+        const channelId = String(threadSnippet.channelId ?? "");
+        const top = asRecord(threadSnippet.topLevelComment);
+        const snippet = asRecord(top.snippet);
+        const author = String(asRecord(snippet.authorChannelId).value ?? "");
+        const text = String(snippet.textOriginal ?? snippet.textDisplay ?? "").trim();
+        if (text && channelId && author === channelId) texts.push(text);
+        const replies = asRecord(thread.replies);
+        for (const reply of Array.isArray(replies.comments) ? replies.comments : []) {
+          const replySnippet = asRecord(asRecord(reply).snippet);
+          const replyAuthor = String(asRecord(replySnippet.authorChannelId).value ?? "");
+          const replyText = String(replySnippet.textOriginal ?? replySnippet.textDisplay ?? "").trim();
+          if (replyText && channelId && replyAuthor === channelId) texts.push(replyText);
+        }
+      }
+      return texts;
+    } catch (error) {
+      if (error instanceof YouTubeApiError && error.code === "QUOTA") throw error;
+      return [];
+    }
   }
 
   async channelIdForVideo(videoId: string): Promise<string | null> {

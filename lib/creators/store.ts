@@ -33,7 +33,6 @@ export async function saveDiscoveredChannel(
     description: channel.description,
     country: channel.country,
     discoveryRegion: channel.discoveryRegion,
-    language: channel.defaultLanguage,
     subscriberCount: channel.subscriberCount,
     subscriberVisibility: channel.subscriberVisibility,
     videoCount: channel.videoCount,

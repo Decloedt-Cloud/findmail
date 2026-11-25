@@ -135,6 +135,12 @@ model Creator {
   country              String?
   discoveryRegion      String?
   language             String?
+  /// Set once titles, descriptions, and comments have been read. Null is an older read.
+  languageCheckedAt    DateTime?
+  /// Which reading rules produced `language`. An older number is read again.
+  languageReadVersion  Int                   @default(0)
+  /// Countries stated in the channel's texts (`FR` or `FR,MA`). The YouTube checkbox stays on `country`.
+  contentCountries     String?
   subscriberCount      Int?
   subscriberVisibility SubscriberVisibility  @default(UNAVAILABLE)
   videoCount           Int?

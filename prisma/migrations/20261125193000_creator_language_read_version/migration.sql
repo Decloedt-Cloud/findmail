@@ -1,0 +1,1 @@
+ALTER TABLE "Creator" ADD COLUMN "languageReadVersion" INTEGER NOT NULL DEFAULT 0;

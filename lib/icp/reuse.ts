@@ -2,21 +2,20 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { USABLE_CONTACT } from "@/lib/creators/contact";
-import { ICP_COUNTRIES, ICP_MAX_SUBSCRIBERS, ICP_MIN_SUBSCRIBERS } from "@/lib/icp/audience";
+import { ICP_MAX_SUBSCRIBERS, ICP_MIN_SUBSCRIBERS } from "@/lib/icp/audience";
 import { selectCreatorsForIcp } from "@/lib/icp/select-creators";
 import { embedText } from "@/lib/icp/embed";
 import { nearestStoredCreatorIds } from "@/lib/icp/vector-search";
 import { activeSince, hasEnoughViews } from "@/lib/youtube/qualify";
-import { isSpecificLanguageChoice } from "@/lib/youtube/spoken-language";
+import { isSpecificLanguageChoice, LANGUAGE_READ_VERSION } from "@/lib/youtube/spoken-language";
 
 /** How many on-topic channels one DeepSeek call can read. The catalog itself is not cut to this size. */
 const MODEL_CANDIDATE_LIMIT = 40;
 
 /**
- * A requested language keeps a channel that publishes in it, or in a regional
- * variant (`en` covers `en-GB`). A stored language that is a different code is
- * out. A channel with no language stored stays: most of the catalog was saved
- * before a language was written, and hiding those emptied the list.
+ * A requested language keeps a channel whose stored language is that code,
+ * or a regional variant (`en` covers `en-GB`). A channel not read with the
+ * current rules is kept so YouTube can read it.
  */
 export function languageReuseFilter(codes: string[]): Prisma.CreatorWhereInput | null {
   const languages = codes
@@ -27,12 +26,25 @@ export function languageReuseFilter(codes: string[]): Prisma.CreatorWhereInput |
     OR: [
       ...languages.flatMap((code) => [
         { language: { equals: code, mode: "insensitive" as const } },
+        { language: { startsWith: `${code},`, mode: "insensitive" as const } },
+        { language: { endsWith: `,${code}`, mode: "insensitive" as const } },
+        { language: { contains: `,${code},`, mode: "insensitive" as const } },
         { language: { startsWith: `${code}-`, mode: "insensitive" as const } },
+        { language: { contains: `,${code}-`, mode: "insensitive" as const } },
       ]),
-      { language: null },
-      { language: "" },
+      { languageCheckedAt: null },
+      { languageReadVersion: { lt: LANGUAGE_READ_VERSION } },
     ],
   };
+}
+
+export function statedCountryClauses(codes: string[]): Prisma.CreatorWhereInput[] {
+  return codes.flatMap((code) => [
+    { contentCountries: { equals: code, mode: "insensitive" as const } },
+    { contentCountries: { startsWith: `${code},`, mode: "insensitive" as const } },
+    { contentCountries: { endsWith: `,${code}`, mode: "insensitive" as const } },
+    { contentCountries: { contains: `,${code},`, mode: "insensitive" as const } },
+  ]);
 }
 
 /**
@@ -170,12 +182,14 @@ export async function reuseStoredCreators(input: {
   searchQueries: string[];
   limit: number;
   countries?: string[];
-  /** ISO 639-1 codes. A short list keeps channels that publish in one of them. The full language set does not filter. */
+  /** ISO 639-1 codes. Any non-empty list keeps channels that publish in one of them. */
   languages?: string[];
   /** ISO 639-1. A chosen language keeps channels that publish in it. */
   language?: string | null;
   /** Channels already proposed for another request of this onboarding. */
   excludeCreatorIds?: string[];
+  /** Drops ids whose texts do not use the requested language. */
+  confirmIds?: (ids: string[]) => Promise<string[]>;
 }): Promise<{ eligible: number; linked: number }> {
   if (input.limit <= 0) return { eligible: 0, linked: 0 };
   const requested = input.countries?.length ? input.countries : null;
@@ -208,7 +222,7 @@ export async function reuseStoredCreators(input: {
       const nearest = await nearestStoredCreatorIds({
         vector: embedded.vector,
         model: embedded.model,
-        countries: requested ?? ICP_COUNTRIES,
+        countries: requested ?? [],
         languages: languageList,
         excludeCreatorIds: excluded,
         requireRecentActivity: !requested,
@@ -235,7 +249,14 @@ export async function reuseStoredCreators(input: {
       where: {
         hidden: false,
         ...(excluded.length ? { id: { notIn: excluded } } : {}),
-        country: { in: requested ?? ICP_COUNTRIES },
+        ...(requested
+          ? {
+              OR: [
+                { country: { in: requested } },
+                ...statedCountryClauses(requested),
+              ],
+            }
+          : {}),
         ...(language ?? {}),
         subscriberVisibility: "PUBLIC",
         subscriberCount: { gte: ICP_MIN_SUBSCRIBERS, lte: ICP_MAX_SUBSCRIBERS },
@@ -286,8 +307,10 @@ export async function reuseStoredCreators(input: {
     candidates: ranked,
     limit: input.limit,
   });
-  const ids = catalogCreatorIds(selected, ranked.map((creator) => creator.id), input.limit);
+  const picked = catalogCreatorIds(selected, ranked.map((creator) => creator.id), input.limit);
+  const ids = input.confirmIds ? await input.confirmIds(picked) : picked;
   if (ids.length === 0) {
+    const linked = await prisma.icpChannelMatch.count({ where: { brandIcpId: input.brandIcpId } });
     logger.info("icp catalog reuse", {
       brandIcpId: input.brandIcpId,
       mode,
@@ -295,9 +318,9 @@ export async function reuseStoredCreators(input: {
       eligible: matched.length,
       sent: ranked.length,
       selected: 0,
-      linked: 0,
+      linked,
     });
-    return { eligible: matched.length, linked: 0 };
+    return { eligible: matched.length, linked };
   }
   await prisma.icpChannelMatch.createMany({
     data: ids.map((creatorId) => ({ brandIcpId: input.brandIcpId, creatorId })),

@@ -24,6 +24,7 @@ vi.mock("@/lib/db", () => ({
 }));
 
 import { upsertMatchedChannel } from "@/lib/icp/store";
+import type { YouTubeChannel } from "@/lib/youtube/client";
 
 function uniqueViolation() {
   return Object.assign(new Error("Unique constraint failed on the fields: (`youtubeChannelId`)"), { code: "P2002" });
@@ -42,7 +43,8 @@ const channel = {
   viewCount: "2100000",
   thumbnailUrl: null,
   keywords: [],
-} as never;
+  uploadsPlaylistId: null,
+} satisfies YouTubeChannel;
 
 /** Each call that looks a row up by YouTube channel id gets the next answer in `lookups`. */
 function scriptLookups(lookups: Array<{ id: string } | null>) {
@@ -88,6 +90,24 @@ describe("upsertMatchedChannel", () => {
 
     expect(result.created).toBe(false);
     expect(mocks.update).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not erase a stored language when this read found none", async () => {
+    scriptLookups([{ id: "creator-1" }]);
+    mocks.update.mockResolvedValue({ id: "creator-1" });
+
+    await upsertMatchedChannel({ ...channel, defaultLanguage: null }, null);
+
+    expect(mocks.update.mock.calls[0][0].data.language).toBeUndefined();
+  });
+
+  it("stores a language this read found", async () => {
+    scriptLookups([{ id: "creator-1" }]);
+    mocks.update.mockResolvedValue({ id: "creator-1" });
+
+    await upsertMatchedChannel(channel, null);
+
+    expect(mocks.update.mock.calls[0][0].data.language).toBe("fr");
   });
 
   it("gives up after three conflicts and raises, so the caller can skip the channel", async () => {

@@ -4,6 +4,7 @@ import { prisma, isUniqueViolation } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { rememberCreatorEmbedding } from "@/lib/icp/vector-search";
 import { AVERAGE_VIEWS_METHOD } from "@/lib/youtube/metrics";
+import { LANGUAGE_READ_VERSION } from "@/lib/youtube/spoken-language";
 import { extractPublicContacts } from "@/lib/youtube/contacts";
 
 function channelUrl(id: string, customUrl: string | null) {
@@ -134,11 +135,20 @@ async function writeChannelCreator(youtubeChannelId: string, data: ChannelCreato
   throw lastError;
 }
 
+/** A read that found no language must not erase one already stored. */
+function languageToStore(value: string | null | undefined): string | null {
+  const text = (value ?? "").trim();
+  return text.length > 0 ? text : null;
+}
+
 export async function upsertMatchedChannel(
   channel: YouTubeChannel,
   lastPublishedAt: Date | null,
   averageViews: number | null = null,
   formats?: { publishesLongForm: boolean | null; publishesShorts: boolean | null } | null,
+  discoveryRegion?: string | null,
+  languageSettled = false,
+  contentCountries?: string | null,
 ) {
   const shared = {
     channelName: channel.title || channel.id,
@@ -146,7 +156,6 @@ export async function upsertMatchedChannel(
     channelUrl: channelUrl(channel.id, channel.customUrl),
     description: channel.description,
     country: channel.country,
-    language: channel.defaultLanguage,
     subscriberCount: channel.subscriberCount,
     subscriberVisibility: channel.subscriberVisibility,
     videoCount: channel.videoCount,
@@ -173,8 +182,21 @@ export async function upsertMatchedChannel(
       : {}),
     lastMetadataSyncAt: new Date(),
     discoverySource: "YOUTUBE_SEARCH" as const,
+    ...(discoveryRegion && /^[A-Za-z]{2}$/.test(discoveryRegion)
+      ? { discoveryRegion: discoveryRegion.toUpperCase() }
+      : {}),
   };
-  const { creator, created } = await writeChannelCreator(channel.id, { ...shared, hidden: false });
+  const language = languageToStore(channel.defaultLanguage);
+  const { creator, created } = await writeChannelCreator(channel.id, {
+    ...shared,
+    hidden: false,
+    ...(languageSettled
+      ? { language, languageCheckedAt: new Date(), languageReadVersion: LANGUAGE_READ_VERSION }
+      : language
+        ? { language }
+        : {}),
+    ...(contentCountries != null ? { contentCountries } : {}),
+  });
   await attachDescriptionContacts(creator.id, channel.description || "");
   await rememberCreatorEmbedding(creator.id).catch((error) => {
     logger.warn("channel embedding skipped", {

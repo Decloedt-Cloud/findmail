@@ -9,6 +9,7 @@ import {
   EMBED_DIMS,
 } from "@/lib/icp/embed";
 import { activeSince } from "@/lib/youtube/qualify";
+import { isSpecificLanguageChoice, LANGUAGE_READ_VERSION } from "@/lib/youtube/spoken-language";
 
 const VECTOR_LIMIT = 40;
 
@@ -43,16 +44,38 @@ function catalogWhere(input: {
   const languages = languageCodes(input.languages);
   const excluded = input.excludeCreatorIds.filter(Boolean);
   const countrySql = countries.length
-    ? Prisma.sql`c.country IN (${Prisma.join(countries)})`
-    : Prisma.sql`FALSE`;
-  const languageSql = languages.length
     ? Prisma.sql`(
-        c.language IS NULL OR c.language = ''
-        OR lower(c.language) IN (${Prisma.join(languages)})
+        c.country IN (${Prisma.join(countries)})
         OR ${Prisma.join(
-          languages.map((code) => Prisma.sql`lower(c.language) LIKE ${`${code}-%`}`),
+          countries.map(
+            (code) => Prisma.sql`(
+              upper(c."contentCountries") = ${code}
+              OR upper(c."contentCountries") LIKE ${`${code},%`}
+              OR upper(c."contentCountries") LIKE ${`%,${code}`}
+              OR upper(c."contentCountries") LIKE ${`%,${code},%`}
+            )`,
+          ),
           " OR ",
         )}
+      )`
+    : Prisma.sql`TRUE`;
+  const languageSql = isSpecificLanguageChoice(languages)
+    ? Prisma.sql`(
+        (${Prisma.join(
+          languages.map(
+            (code) => Prisma.sql`(
+              lower(c.language) = ${code}
+              OR lower(c.language) LIKE ${`${code},%`}
+              OR lower(c.language) LIKE ${`%,${code}`}
+              OR lower(c.language) LIKE ${`%,${code},%`}
+              OR lower(c.language) LIKE ${`${code}-%`}
+              OR lower(c.language) LIKE ${`%,${code}-%`}
+            )`,
+          ),
+          " OR ",
+        )})
+        OR c."languageCheckedAt" IS NULL
+        OR c."languageReadVersion" < ${LANGUAGE_READ_VERSION}
       )`
     : Prisma.sql`TRUE`;
   const excludedSql = excluded.length

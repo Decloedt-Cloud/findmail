@@ -1,4 +1,4 @@
-import { matchesDeclaredCountry, matchesSubscriberRange, type YouTubeChannel } from "@/lib/youtube/client";
+import { matchesSubscriberRange, type YouTubeChannel } from "@/lib/youtube/client";
 
 export const ICP_MIN_SUBSCRIBERS = 5_000;
 export const ICP_MAX_SUBSCRIBERS = 1_000_000;
@@ -70,8 +70,10 @@ export function channelInRequestedRegion(
 }
 
 export function matchesIcpAudience(channel: Pick<YouTubeChannel, "country" | "subscriberCount" | "subscriberVisibility">) {
-  return (
-    matchesDeclaredCountry(channel.country, ICP_COUNTRIES) &&
-    matchesSubscriberRange(channel.subscriberVisibility, channel.subscriberCount, ICP_MIN_SUBSCRIBERS, ICP_MAX_SUBSCRIBERS)
+  return matchesSubscriberRange(
+    channel.subscriberVisibility,
+    channel.subscriberCount,
+    ICP_MIN_SUBSCRIBERS,
+    ICP_MAX_SUBSCRIBERS,
   );
 }

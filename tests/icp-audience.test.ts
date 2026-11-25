@@ -28,20 +28,20 @@ describe("icpSearchPlan", () => {
 });
 
 describe("matchesIcpAudience", () => {
-  it("keeps a public channel inside the subscriber band and the regions", () => {
+  it("keeps a public channel inside the subscriber band", () => {
     expect(matchesIcpAudience(channel("FR", 5_000))).toBe(true);
     expect(matchesIcpAudience(channel("US", 1_000_000))).toBe(true);
     expect(matchesIcpAudience(channel("MA", 80_000))).toBe(true);
     expect(matchesIcpAudience(channel("AE", 250_000))).toBe(true);
   });
 
-  it("drops channels outside the subscriber band, with a hidden count, or outside the regions", () => {
+  it("drops channels outside the subscriber band or with a hidden count", () => {
     expect(matchesIcpAudience(channel("FR", 4_999))).toBe(false);
     expect(matchesIcpAudience(channel("DE", 1_000_001))).toBe(false);
     expect(matchesIcpAudience(channel("CA", null, "HIDDEN"))).toBe(false);
-    expect(matchesIcpAudience(channel(null, 20_000))).toBe(false);
-    expect(matchesIcpAudience(channel("BR", 20_000))).toBe(false);
-    expect(matchesIcpAudience(channel("JP", 20_000))).toBe(false);
+    expect(matchesIcpAudience(channel(null, 20_000))).toBe(true);
+    expect(matchesIcpAudience(channel("BR", 20_000))).toBe(true);
+    expect(matchesIcpAudience(channel("JP", 20_000))).toBe(true);
   });
 });
 

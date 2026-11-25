@@ -2,12 +2,10 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import {
-  ICP_COUNTRIES,
   ICP_MAX_SUBSCRIBERS,
   ICP_MIN_SUBSCRIBERS,
   channelInRequestedRegion,
   icpSearchPlan,
-  matchesIcpAudience,
   regionSearchCodes,
 } from "@/lib/icp/audience";
 import { hasPublicContact, USABLE_CONTACT } from "@/lib/creators/contact";
@@ -16,12 +14,14 @@ import { discoverPublicEmail } from "@/lib/icp/public-email";
 import { UnrecoverableError } from "bullmq";
 import { searchQueriesForIcp } from "@/lib/icp/deepseek";
 import { snapshotSearchLanguages } from "@/lib/icp/search-language";
+import { confirmSpokenCreatorIds, refreshUncheckedLanguages, resumeUnreadCreators, skipSettledCountryMisses, skipSettledLanguageMisses } from "@/lib/icp/confirm-spoken";
 import { reuseStoredCreators } from "@/lib/icp/reuse";
 import { selectCreatorsForIcp } from "@/lib/icp/select-creators";
 import { upsertMatchedChannel } from "@/lib/icp/store";
 import { YouTubeApiError, YouTubeClient, createYouTubeClient, matchesSubscriberRange, type YouTubeChannel, type YouTubeVideoDetails } from "@/lib/youtube/client";
 import { selectRecentPublicVideos } from "@/lib/youtube/metrics";
-import { channelSpokenLanguage, isSpecificLanguageChoice } from "@/lib/youtube/spoken-language";
+import { contentCountryList, readContentCountries, storedCountriesCover } from "@/lib/youtube/content-country";
+import { channelLanguageRead, isSpecificLanguageChoice, storedLanguageCovers } from "@/lib/youtube/spoken-language";
 import { icpSearchPausedUntil, youtubeQuotaDayStart } from "@/lib/youtube/quota-day";
 
 export async function runMatchIcpChannels(processingJobId: string) {
@@ -71,6 +71,15 @@ export async function runMatchIcpChannels(processingJobId: string) {
     for (const link of own) {
       if (link.creator.youtubeChannelId) skipChannelIds.add(link.creator.youtubeChannelId);
     }
+    const catalogClient = await openMatchYouTubeClient();
+    const resumed = await resumeUnreadCreators(catalogClient, countries, languages, skipChannelIds);
+    if (resumed.length > 0) {
+      await prisma.icpChannelMatch.createMany({
+        data: resumed.map((creatorId) => ({ brandIcpId: brand.id, creatorId })),
+        skipDuplicates: true,
+      });
+    }
+    await refreshUncheckedLanguages(catalogClient, own.map((link) => link.creatorId));
     const catalog = await reuseStoredCreators({
       brandIcpId: brand.id,
       brandName: brand.brandName,
@@ -81,6 +90,7 @@ export async function runMatchIcpChannels(processingJobId: string) {
       language: languages[0] ?? null,
       languages,
       excludeCreatorIds: excludedCreatorIds,
+      confirmIds: (ids) => confirmSpokenCreatorIds(catalogClient, ids, languages),
     });
     // `linked` is the row's total, not this run's share.
     const reused = Math.max(0, catalog.linked - linkedBefore);
@@ -90,10 +100,14 @@ export async function runMatchIcpChannels(processingJobId: string) {
     let queries = brand.searchQueries;
     let found: Awaited<ReturnType<typeof findAudienceChannels>> = {
       channels: [],
+      unread: [],
+      dropped: [],
       inspected: 0,
       quotaStopped: false,
     };
     if (remaining > 0) {
+      await skipSettledLanguageMisses(skipChannelIds, languages);
+      await skipSettledCountryMisses(skipChannelIds, countries);
       await markSearchPhase(brand.id, brand.snapshot, "writing");
       const analyzed = await searchQueriesForIcp({
         brandName: brand.brandName,
@@ -122,7 +136,7 @@ export async function runMatchIcpChannels(processingJobId: string) {
         inspected: found.inspected,
         note: countries.length
           ? "No public YouTube channel was found in the requested countries for this ICP."
-          : "No public channel in Europe, North America, North Africa, or the Gulf has between 5,000 and 1,000,000 subscribers for this ICP.",
+          : "No public channel between 5,000 and 1,000,000 subscribers was found for this ICP.",
       });
       return;
     }
@@ -133,10 +147,18 @@ export async function runMatchIcpChannels(processingJobId: string) {
     for (const channel of found.channels) {
       let saved;
       try {
-        saved = await upsertMatchedChannel(channel.channel, channel.publishedAt, channel.averageViews, {
-          publishesLongForm: channel.publishesLongForm,
-          publishesShorts: channel.publishesShorts,
-        });
+        saved = await upsertMatchedChannel(
+          channel.channel,
+          channel.publishedAt,
+          channel.averageViews,
+          {
+            publishesLongForm: channel.publishesLongForm,
+            publishesShorts: channel.publishesShorts,
+          },
+          channel.searchRegion,
+          channel.languageSettled,
+          channel.contentCountries,
+        );
       } catch (error) {
         // One channel that cannot be saved must not fail the whole search. It is skipped
         // and logged, so the other channels of this batch still reach the advertiser.
@@ -151,6 +173,28 @@ export async function runMatchIcpChannels(processingJobId: string) {
       if (blocked.has(creator.id)) continue;
       if (created) createdCandidateIds.push(creator.id);
       freshCreators.push(creator);
+    }
+    for (const channel of [...found.unread, ...found.dropped]) {
+      try {
+        await upsertMatchedChannel(
+          channel.channel,
+          channel.publishedAt,
+          channel.averageViews,
+          {
+            publishesLongForm: channel.publishesLongForm,
+            publishesShorts: channel.publishesShorts,
+          },
+          channel.searchRegion,
+          channel.languageSettled,
+          channel.contentCountries,
+        );
+      } catch (error) {
+        logger.warn("icp unread channel skipped", {
+          brandIcpId: brand.id,
+          channelId: channel.channel.id,
+          message: error instanceof Error ? error.message.slice(0, 300) : "unknown",
+        });
+      }
     }
     const selectedFresh = await selectCreatorsForIcp({
       brandName: brand.brandName,
@@ -503,6 +547,35 @@ async function creatorsProposedOnOtherRequests(onboardingId: string, brandIcpId:
   return { creatorIds: [...new Set(creatorIds)], youtubeChannelIds };
 }
 
+/** Two comment pages per channel, and a cap so a quiet batch cannot spend the day's quota. */
+const COMMENT_CALL_BUDGET = 240;
+const CREATOR_COMMENT_VIDEOS = 30;
+const UPLOAD_SAMPLE = 200;
+
+async function openMatchYouTubeClient() {
+  const daily = Number(process.env.YOUTUBE_DAILY_QUOTA || 10000);
+  const since = youtubeQuotaDayStart();
+  const used = await prisma.apiUsage.aggregate({
+    _sum: { units: true },
+    where: { provider: "youtube", createdAt: { gte: since } },
+  });
+  let consumed = used._sum.units ?? 0;
+  return createYouTubeClient(
+    fetch,
+    async (units, operation, success, message) => {
+      consumed += units;
+      await prisma.apiUsage.create({
+        data: { provider: "youtube", operation, units, success, message: message?.slice(0, 300) },
+      });
+    },
+    (units) => {
+      if (consumed + units > daily) {
+        throw new YouTubeApiError("The daily YouTube quota budget would be exceeded by the next request.", "QUOTA");
+      }
+    },
+  );
+}
+
 async function findAudienceChannels(
   queries: string[],
   target: number,
@@ -517,6 +590,25 @@ async function findAudienceChannels(
     averageViews: number | null;
     publishesLongForm: boolean | null;
     publishesShorts: boolean | null;
+    searchRegion: string | null;
+    languageSettled: boolean;
+    languageOk: boolean;
+    awaitContentCountry: boolean;
+    contentCountries: string | null;
+    textsReady: boolean;
+  }>();
+  const unplaced = new Map<string, {
+    channel: YouTubeChannel;
+    publishedAt: Date | null;
+    averageViews: number | null;
+    publishesLongForm: boolean | null;
+    publishesShorts: boolean | null;
+    searchRegion: string | null;
+    languageSettled: boolean;
+    languageOk: boolean;
+    awaitContentCountry: boolean;
+    contentCountries: string | null;
+    textsReady: boolean;
   }>();
   let inspected = 0;
   const filtered = {
@@ -526,27 +618,7 @@ async function findAudienceChannels(
     belowMinimum: 0,
     aboveMaximum: 0,
   };
-  const daily = Number(process.env.YOUTUBE_DAILY_QUOTA || 10000);
-  const since = youtubeQuotaDayStart();
-  const used = await prisma.apiUsage.aggregate({
-    _sum: { units: true },
-    where: { provider: "youtube", createdAt: { gte: since } },
-  });
-  let consumed = used._sum.units ?? 0;
-  const searchClient = createYouTubeClient(
-    fetch,
-    async (units, operation, success, message) => {
-      consumed += units;
-      await prisma.apiUsage.create({
-        data: { provider: "youtube", operation, units, success, message: message?.slice(0, 300) },
-      });
-    },
-    (units) => {
-      if (consumed + units > daily) {
-        throw new YouTubeApiError("The daily YouTube quota budget would be exceeded by the next request.", "QUOTA");
-      }
-    },
-  );
+  const searchClient = await openMatchYouTubeClient();
   let quotaStopped = false;
   const spoken = languages.filter(Boolean);
   const multiLanguage = spoken.length > 1;
@@ -592,16 +664,14 @@ async function findAudienceChannels(
         if (fresh.length > 0) {
           const channels = await loadChannels(fresh, searchClient);
           for (const channel of channels) {
-            const inRegion = countries.length
-              ? channelInRequestedRegion(channel.country, countries)
-              : ICP_COUNTRIES.includes((channel.country || "").toUpperCase());
+            const declaredMatch = countries.length === 0 || channelInRequestedRegion(channel.country, countries);
             const inBand = matchesSubscriberRange(
               channel.subscriberVisibility,
               channel.subscriberCount,
               ICP_MIN_SUBSCRIBERS,
               ICP_MAX_SUBSCRIBERS,
             );
-            const strict = countries.length ? inRegion && inBand : matchesIcpAudience(channel);
+            const strict = declaredMatch && inBand;
             if (skipChannelIds.has(channel.id)) continue;
             if (strict) kept.set(channel.id, {
               channel,
@@ -609,9 +679,35 @@ async function findAudienceChannels(
               averageViews: null,
               publishesLongForm: null,
               publishesShorts: null,
+              searchRegion: null,
+              languageSettled: false,
+              languageOk: false,
+              awaitContentCountry: false,
+              contentCountries: null,
+              textsReady: false,
             });
+            else if (
+              inBand
+              && !declaredMatch
+              && unplaced.size < 12
+              && !unplaced.has(channel.id)
+            ) {
+              unplaced.set(channel.id, {
+                channel,
+                publishedAt: null,
+                averageViews: null,
+                publishesLongForm: null,
+                publishesShorts: null,
+                searchRegion: null,
+                languageSettled: false,
+                languageOk: false,
+                awaitContentCountry: true,
+                contentCountries: null,
+                textsReady: false,
+              });
+            }
             else if (!channel.country) filtered.missingCountry += 1;
-            else if (!inRegion) filtered.outsideRegion += 1;
+            else if (!declaredMatch) filtered.outsideRegion += 1;
             else if (channel.subscriberVisibility !== "PUBLIC" || channel.subscriberCount == null) filtered.hiddenSubscribers += 1;
             else if ((channel.subscriberCount ?? 0) < ICP_MIN_SUBSCRIBERS) filtered.belowMinimum += 1;
             else filtered.aboveMaximum += 1;
@@ -630,13 +726,13 @@ async function findAudienceChannels(
   }
   }
   const pool = isSpecificLanguageChoice(languages) ? target * 2 : target;
-  const selected = [...kept.values()].slice(0, pool);
+  const selected = [...[...kept.values()].slice(0, pool), ...unplaced.values()];
   const uploadIds = new Map<string, string[]>();
   for (const entry of selected) {
     const playlistId = entry.channel.uploadsPlaylistId;
     if (!playlistId) continue;
     try {
-      const uploads = await searchClient.listUploads(playlistId, 20);
+      const uploads = await searchClient.listUploads(playlistId, UPLOAD_SAMPLE);
       uploadIds.set(entry.channel.id, uploads.map((item) => item.videoId));
       const published = uploads[0]?.publishedAt;
       const date = published ? new Date(published) : null;
@@ -653,6 +749,7 @@ async function findAudienceChannels(
     }
   }
   const details = new Map<string, YouTubeVideoDetails>();
+  let commentCalls = 0;
   const videoIds = [...new Set([...uploadIds.values()].flat())];
   try {
     for (let index = 0; index < videoIds.length; index += 50) {
@@ -673,20 +770,74 @@ async function findAudienceChannels(
     entry.publishesShorts = activity.publishesShorts;
     const active = activity.lastActiveAt ? new Date(activity.lastActiveAt) : null;
     if (active && !Number.isNaN(active.getTime())) entry.publishedAt = active;
-    if (!isSpecificLanguageChoice(languages)) continue;
-    const titled = activity.retained.length > 0 ? activity.retained : videos;
-    const spoken = channelSpokenLanguage(titled);
-    // Titles that do not agree are not another language. A channel snippet
-    // left in place was hiding those channels from the language the user asked for.
-    if (!spoken) {
-      entry.channel.defaultLanguage = null;
-      continue;
+    const recentIds = new Set(activity.retained.map((video) => video.id));
+    const posts = (recentIds.size > 0 ? videos.filter((video) => recentIds.has(video.id)) : videos).map((video) => ({
+      id: video.id,
+      title: video.title,
+      description: video.description,
+      creatorComments: [] as string[],
+      about: false,
+    }));
+    if (entry.channel.description.trim()) {
+      posts.push({ id: "", title: "", description: entry.channel.description, creatorComments: [], about: true });
     }
-    if (languages.includes(spoken)) entry.channel.defaultLanguage = spoken;
-    else entry.channel.defaultLanguage = "";
+    const placeTexts = posts.map((post) => ({
+      title: post.title,
+      description: post.description,
+      about: post.about,
+    }));
+    if (entry.channel.keywords.length > 0) {
+      placeTexts.push({ title: "", description: entry.channel.keywords.join(" "), about: true });
+    }
+    const listedUploads = uploadIds.has(entry.channel.id) || !entry.channel.uploadsPlaylistId;
+    const expectedUploads = uploadIds.get(entry.channel.id) ?? [];
+    const textsReady = listedUploads && (expectedUploads.length === 0 || videos.length > 0 || !quotaStopped);
+    const hasCommentTarget = posts.some((post) => post.id);
+    let commentsFinished = textsReady && !hasCommentTarget;
+    if (textsReady && hasCommentTarget && !quotaStopped && commentCalls < COMMENT_CALL_BUDGET) {
+      commentsFinished = true;
+      let fetched = 0;
+      for (const post of posts) {
+        if (!post.id || fetched >= CREATOR_COMMENT_VIDEOS) break;
+        if (commentCalls >= COMMENT_CALL_BUDGET) {
+          commentsFinished = false;
+          break;
+        }
+        try {
+          post.creatorComments = await searchClient.listCommentTexts(post.id);
+          commentCalls += 1;
+          fetched += 1;
+        } catch (error) {
+          if (error instanceof YouTubeApiError && error.code === "QUOTA") quotaStopped = true;
+          commentsFinished = false;
+          break;
+        }
+      }
+    }
+    const read = textsReady ? channelLanguageRead(posts) : { language: null, conclusive: false };
+    const places = textsReady ? readContentCountries(placeTexts) : { countries: [], conclusive: false };
+    entry.contentCountries = contentCountryList(places.countries) ?? (places.conclusive ? "" : null);
+    entry.textsReady = textsReady;
+    // A short sample that names no language is read again later. A finished read is kept.
+    entry.languageSettled = textsReady && commentsFinished && read.conclusive;
+    const spoken = read.language;
+    entry.channel.defaultLanguage = spoken;
+    if (!textsReady) continue;
+    entry.languageOk = !isSpecificLanguageChoice(languages) || storedLanguageCovers(spoken, languages);
   }
-  const matching = selected.filter((entry) => entry.channel.defaultLanguage !== "");
-  return { channels: matching.slice(0, target), inspected, quotaStopped };
+  const matching = selected.filter((entry) => {
+    if (!entry.languageOk) return false;
+    if (!entry.awaitContentCountry || countries.length === 0) return true;
+    return storedCountriesCover(entry.contentCountries, countries);
+  });
+  const matched = new Set(matching);
+  return {
+    channels: matching.slice(0, target),
+    unread: selected.filter((entry) => !entry.textsReady),
+    dropped: selected.filter((entry) => entry.textsReady && entry.languageSettled && !matched.has(entry)),
+    inspected,
+    quotaStopped,
+  };
 }
 
 /** The step the advertiser is shown. Kept off the ICP text sent to the model. */
