@@ -8,18 +8,21 @@ export async function cancelJob(id: string, userId: string) {
   const job = await prisma.processingJob.findUnique({ where: { id } });
   if (!job) throw new ApiError(404, "Job not found");
   if (!canCancelJob(job.status)) throw new ApiError(409, "This job can no longer be cancelled");
-  const queued = job.status === "QUEUED";
   await prisma.processingJob.update({
     where: { id },
     data: {
       cancelRequested: true,
-      status: queued ? "CANCELLED" : job.status,
-      completedAt: queued ? new Date() : job.completedAt,
+      status: "CANCELLED",
+      completedAt: new Date(),
     },
   });
   await prisma.searchJob.updateMany({
     where: { processingJobId: id },
-    data: queued ? { cancelRequested: true, status: "CANCELLED", completedAt: new Date() } : { cancelRequested: true },
+    data: { cancelRequested: true, status: "CANCELLED", completedAt: new Date() },
+  });
+  await prisma.brandIcp.updateMany({
+    where: { processingJobId: id, status: { in: ["QUEUED", "RUNNING"] } },
+    data: { status: "CANCELLED" },
   });
   await removeQueuedBullJob(job.bullJobId);
   await audit(userId, "job.cancel", "processingJob", id);

@@ -3,6 +3,9 @@ import { YouTubeApiError, type YouTubeClient } from "@/lib/youtube/client";
 import { contentCountryList, readContentCountries, storedCountriesCover } from "@/lib/youtube/content-country";
 import { languageReuseFilter, statedCountryClauses } from "@/lib/icp/reuse";
 import { channelLanguageRead, isSpecificLanguageChoice, LANGUAGE_READ_VERSION, storedLanguageCovers } from "@/lib/youtube/spoken-language";
+import { JobCancelled } from "@/lib/jobs/progress";
+
+type Stop = () => Promise<void>;
 
 const CREATOR_COMMENT_VIDEOS = 30;
 const UPLOAD_SAMPLE = 200;
@@ -14,6 +17,7 @@ const UPLOAD_SAMPLE = 200;
 export async function refreshUncheckedLanguages(
   client: YouTubeClient,
   ids: string[],
+  stop?: Stop,
 ): Promise<void> {
   const pending = ids.filter(Boolean);
   if (pending.length === 0) return;
@@ -26,9 +30,10 @@ export async function refreshUncheckedLanguages(
     take: 25,
   });
   for (const row of rows) {
+    if (stop) await stop();
     if (!row.youtubeChannelId) continue;
     try {
-      const spoken = await readSpokenLanguage(client, row.youtubeChannelId);
+      const spoken = await readSpokenLanguage(client, row.youtubeChannelId, stop);
       await prisma.creator.update({
         where: { id: row.id },
         data: {
@@ -38,6 +43,7 @@ export async function refreshUncheckedLanguages(
         },
       });
     } catch (error) {
+      if (error instanceof JobCancelled) throw error;
       if (error instanceof YouTubeApiError && error.code === "QUOTA") return;
     }
   }
@@ -52,6 +58,7 @@ export async function resumeUnreadCreators(
   countries: string[],
   languages: string[],
   skipYoutubeIds: Set<string>,
+  stop?: Stop,
 ): Promise<string[]> {
   const since = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
   const rows = await prisma.creator.findMany({
@@ -74,9 +81,10 @@ export async function resumeUnreadCreators(
   const wanted = countries.map((code) => code.toUpperCase());
   const kept: string[] = [];
   for (const row of rows) {
+    if (stop) await stop();
     if (!row.youtubeChannelId || skipYoutubeIds.has(row.youtubeChannelId)) continue;
     try {
-      const spoken = await readSpokenLanguage(client, row.youtubeChannelId);
+      const spoken = await readSpokenLanguage(client, row.youtubeChannelId, stop);
       await prisma.creator.update({
         where: { id: row.id },
         data: {
@@ -92,6 +100,7 @@ export async function resumeUnreadCreators(
       const languageOk = !isSpecificLanguageChoice(languages) || storedLanguageCovers(spoken.language, languages);
       if (countryOk && languageOk) kept.push(row.id);
     } catch (error) {
+      if (error instanceof JobCancelled) throw error;
       if (error instanceof YouTubeApiError && error.code === "QUOTA") break;
     }
   }
@@ -102,10 +111,14 @@ export async function resumeUnreadCreators(
 export async function readSpokenLanguage(
   client: YouTubeClient,
   youtubeChannelId: string,
+  stop?: Stop,
 ): Promise<{ language: string | null; conclusive: boolean; countries: string | null }> {
+  if (stop) await stop();
   const [channel] = await client.listChannels([youtubeChannelId]);
   if (!channel) return { language: null, conclusive: false, countries: null };
+  if (stop) await stop();
   const uploads = channel.uploadsPlaylistId ? await client.listUploads(channel.uploadsPlaylistId, UPLOAD_SAMPLE) : [];
+  if (stop) await stop();
   const details = uploads.length ? await client.listVideos(uploads.map((item) => item.videoId)) : [];
   const posts = details.map((video) => ({
     id: video.id,
@@ -119,6 +132,7 @@ export async function readSpokenLanguage(
   }
   let fetched = 0;
   for (const post of posts) {
+    if (stop) await stop();
     if (!post.id || fetched >= CREATOR_COMMENT_VIDEOS) break;
     post.creatorComments = await client.listCommentTexts(post.id);
     fetched += 1;
@@ -142,6 +156,7 @@ export async function confirmSpokenCreatorIds(
   client: YouTubeClient,
   ids: string[],
   languages: string[],
+  stop?: Stop,
 ): Promise<string[]> {
   if (!isSpecificLanguageChoice(languages) || ids.length === 0) return ids;
   const rows = await prisma.creator.findMany({
@@ -151,6 +166,7 @@ export async function confirmSpokenCreatorIds(
   const byId = new Map(rows.map((row) => [row.id, row]));
   const kept: string[] = [];
   for (const id of ids) {
+    if (stop) await stop();
     const row = byId.get(id);
     if (!row?.youtubeChannelId) continue;
     if (row.languageCheckedAt && row.languageReadVersion >= LANGUAGE_READ_VERSION) {
@@ -158,7 +174,7 @@ export async function confirmSpokenCreatorIds(
       continue;
     }
     try {
-      const spoken = await readSpokenLanguage(client, row.youtubeChannelId);
+      const spoken = await readSpokenLanguage(client, row.youtubeChannelId, stop);
       await prisma.creator.update({
         where: { id },
         data: {
@@ -169,6 +185,7 @@ export async function confirmSpokenCreatorIds(
       });
       if (storedLanguageCovers(spoken.language, languages)) kept.push(id);
     } catch (error) {
+      if (error instanceof JobCancelled) throw error;
       if (error instanceof YouTubeApiError && error.code === "QUOTA") break;
     }
   }

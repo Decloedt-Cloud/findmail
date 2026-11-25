@@ -23,6 +23,7 @@ import { selectRecentPublicVideos } from "@/lib/youtube/metrics";
 import { contentCountryList, readContentCountries, storedCountriesCover } from "@/lib/youtube/content-country";
 import { channelLanguageRead, isSpecificLanguageChoice, storedLanguageCovers } from "@/lib/youtube/spoken-language";
 import { icpSearchPausedUntil, youtubeQuotaDayStart } from "@/lib/youtube/quota-day";
+import { isCancelled, JobCancelled, throwIfCancelled } from "@/lib/jobs/progress";
 
 export async function runMatchIcpChannels(processingJobId: string) {
   const brand = await prisma.brandIcp.findUnique({ where: { processingJobId } });
@@ -41,6 +42,11 @@ export async function runMatchIcpChannels(processingJobId: string) {
     return;
   }
 
+  if (await isCancelled(processingJobId)) {
+    await finishCancelledMatch(brand.id, processingJobId);
+    return;
+  }
+
   await prisma.brandIcp.update({
     where: { id: brand.id },
     data: { status: "RUNNING", errorSummary: null },
@@ -50,6 +56,12 @@ export async function runMatchIcpChannels(processingJobId: string) {
     where: { id: processingJobId },
     data: { status: "RUNNING", startedAt: new Date(), progress: 10 },
   });
+  if (await isCancelled(processingJobId)) {
+    await finishCancelledMatch(brand.id, processingJobId);
+    return;
+  }
+
+  const stop = () => throwIfCancelled(processingJobId);
 
   try {
     const languages = snapshotSearchLanguages(brand.snapshot);
@@ -72,14 +84,14 @@ export async function runMatchIcpChannels(processingJobId: string) {
       if (link.creator.youtubeChannelId) skipChannelIds.add(link.creator.youtubeChannelId);
     }
     const catalogClient = await openMatchYouTubeClient();
-    const resumed = await resumeUnreadCreators(catalogClient, countries, languages, skipChannelIds);
+    const resumed = await resumeUnreadCreators(catalogClient, countries, languages, skipChannelIds, stop);
     if (resumed.length > 0) {
       await prisma.icpChannelMatch.createMany({
         data: resumed.map((creatorId) => ({ brandIcpId: brand.id, creatorId })),
         skipDuplicates: true,
       });
     }
-    await refreshUncheckedLanguages(catalogClient, own.map((link) => link.creatorId));
+    await refreshUncheckedLanguages(catalogClient, own.map((link) => link.creatorId), stop);
     const catalog = await reuseStoredCreators({
       brandIcpId: brand.id,
       brandName: brand.brandName,
@@ -90,7 +102,7 @@ export async function runMatchIcpChannels(processingJobId: string) {
       language: languages[0] ?? null,
       languages,
       excludeCreatorIds: excludedCreatorIds,
-      confirmIds: (ids) => confirmSpokenCreatorIds(catalogClient, ids, languages),
+      confirmIds: (ids) => confirmSpokenCreatorIds(catalogClient, ids, languages, stop),
     });
     // `linked` is the row's total, not this run's share.
     const reused = Math.max(0, catalog.linked - linkedBefore);
@@ -122,7 +134,7 @@ export async function runMatchIcpChannels(processingJobId: string) {
         data: { searchQueries: analyzed.queries, analysisNote: analyzed.note || null },
       });
       await markSearchPhase(brand.id, brand.snapshot, "youtube");
-      found = await findAudienceChannels(analyzed.queries, remaining, countries, skipChannelIds, languages);
+      found = await findAudienceChannels(analyzed.queries, remaining, countries, skipChannelIds, languages, stop);
     }
     if (reused === 0 && found.channels.length === 0) {
       if (found.quotaStopped) {
@@ -145,6 +157,7 @@ export async function runMatchIcpChannels(processingJobId: string) {
     const freshCreators = [];
     const createdCandidateIds: string[] = [];
     for (const channel of found.channels) {
+      await stop();
       let saved;
       try {
         saved = await upsertMatchedChannel(
@@ -175,6 +188,7 @@ export async function runMatchIcpChannels(processingJobId: string) {
       freshCreators.push(creator);
     }
     for (const channel of [...found.unread, ...found.dropped]) {
+      await stop();
       try {
         await upsertMatchedChannel(
           channel.channel,
@@ -237,6 +251,7 @@ export async function runMatchIcpChannels(processingJobId: string) {
       await discardCreatedWithoutContact(createdCandidateIds);
     }
 
+    await stop();
     const channelCount = await prisma.icpChannelMatch.count({ where: { brandIcpId: brand.id } });
     if (channelCount === 0) {
       const noRelevance = deepseekSelected === 0 && selectedFresh.length === 0;
@@ -254,16 +269,16 @@ export async function runMatchIcpChannels(processingJobId: string) {
       });
       return;
     }
-    await prisma.brandIcp.update({
-      where: { id: brand.id },
+    await prisma.brandIcp.updateMany({
+      where: { id: brand.id, status: "RUNNING" },
       data: {
         status: "COMPLETED",
         matchedChannelCount: channelCount,
         errorSummary: null,
       },
     });
-    await prisma.processingJob.update({
-      where: { id: processingJobId },
+    await prisma.processingJob.updateMany({
+      where: { id: processingJobId, status: "RUNNING" },
       data: {
         status: "COMPLETED",
         progress: 100,
@@ -274,6 +289,10 @@ export async function runMatchIcpChannels(processingJobId: string) {
       },
     });
   } catch (error) {
+    if (error instanceof JobCancelled || await isCancelled(processingJobId)) {
+      await finishCancelledMatch(brand.id, processingJobId);
+      return;
+    }
     const message = error instanceof Error ? error.message : "ICP matching failed.";
     logger.error("icp match failed", { brandIcpId: brand.id, message });
     await prisma.brandIcp.update({
@@ -308,6 +327,18 @@ function channelTarget(snapshot: unknown) {
   return CHANNEL_TARGET;
 }
 
+/** Cancel wins over a later completion. The profile stays cancelled, not failed. */
+async function finishCancelledMatch(brandId: string, processingJobId: string) {
+  await prisma.brandIcp.updateMany({
+    where: { id: brandId, status: { in: ["QUEUED", "RUNNING"] } },
+    data: { status: "CANCELLED" },
+  });
+  await prisma.processingJob.updateMany({
+    where: { id: processingJobId, status: { in: ["QUEUED", "RUNNING"] } },
+    data: { status: "CANCELLED", cancelRequested: true, completedAt: new Date() },
+  });
+}
+
 /** Empty match is a finished search, not a failed job. A new search needs a
  *  different country or language, or an explicit search again.
  *  A search again that finds nothing keeps the batch already on the request. */
@@ -317,17 +348,21 @@ async function completeMatchWithNoChannels(input: {
   inspected: number;
   note: string;
 }) {
+  if (await isCancelled(input.processingJobId)) {
+    await finishCancelledMatch(input.brandId, input.processingJobId);
+    return;
+  }
   const kept = await prisma.icpChannelMatch.count({ where: { brandIcpId: input.brandId } });
-  await prisma.brandIcp.update({
-    where: { id: input.brandId },
+  await prisma.brandIcp.updateMany({
+    where: { id: input.brandId, status: "RUNNING" },
     data: {
       status: "COMPLETED",
       matchedChannelCount: kept,
       errorSummary: input.note.slice(0, 800),
     },
   });
-  await prisma.processingJob.update({
-    where: { id: input.processingJobId },
+  await prisma.processingJob.updateMany({
+    where: { id: input.processingJobId, status: "RUNNING" },
     data: {
       status: "COMPLETED",
       progress: 100,
@@ -582,6 +617,7 @@ async function findAudienceChannels(
   countries: string[] = [],
   skipChannelIds: Set<string> = new Set(),
   languages: string[] = [],
+  stop: () => Promise<void> = async () => {},
 ) {
   const poolTarget = target * 3;
   const kept = new Map<string, {
@@ -638,8 +674,10 @@ async function findAudienceChannels(
     if (kept.size >= poolTarget || quotaStopped) break;
     for (const { query } of phrases) {
       if (kept.size >= poolTarget || quotaStopped) break;
+      await stop();
       let pageToken: string | undefined;
       for (let pageIndex = 0; pageIndex < maxPages && kept.size < poolTarget; pageIndex += 1) {
+        await stop();
         let page;
         try {
           page = await searchClient.search({
@@ -652,6 +690,7 @@ async function findAudienceChannels(
             pageToken,
           });
         } catch (error) {
+          if (error instanceof JobCancelled) throw error;
           if (error instanceof YouTubeApiError && error.code === "QUOTA") {
             quotaStopped = true;
             break;
@@ -729,6 +768,7 @@ async function findAudienceChannels(
   const selected = [...[...kept.values()].slice(0, pool), ...unplaced.values()];
   const uploadIds = new Map<string, string[]>();
   for (const entry of selected) {
+    await stop();
     const playlistId = entry.channel.uploadsPlaylistId;
     if (!playlistId) continue;
     try {
@@ -738,6 +778,7 @@ async function findAudienceChannels(
       const date = published ? new Date(published) : null;
       if (date && !Number.isNaN(date.getTime())) entry.publishedAt = date;
     } catch (error) {
+      if (error instanceof JobCancelled) throw error;
       if (error instanceof YouTubeApiError && error.code === "QUOTA") {
         quotaStopped = true;
         break;
@@ -753,14 +794,17 @@ async function findAudienceChannels(
   const videoIds = [...new Set([...uploadIds.values()].flat())];
   try {
     for (let index = 0; index < videoIds.length; index += 50) {
+      await stop();
       const batch = await searchClient.listVideos(videoIds.slice(index, index + 50));
       for (const video of batch) details.set(video.id, video);
     }
   } catch (error) {
+    if (error instanceof JobCancelled) throw error;
     if (error instanceof YouTubeApiError && error.code === "QUOTA") quotaStopped = true;
     else logger.warn("icp video stats skipped", { message: error instanceof Error ? error.message : "unknown" });
   }
   for (const entry of selected) {
+    await stop();
     const videos = (uploadIds.get(entry.channel.id) ?? [])
       .map((id) => details.get(id))
       .filter((video): video is YouTubeVideoDetails => Boolean(video));
@@ -798,6 +842,7 @@ async function findAudienceChannels(
       commentsFinished = true;
       let fetched = 0;
       for (const post of posts) {
+        await stop();
         if (!post.id || fetched >= CREATOR_COMMENT_VIDEOS) break;
         if (commentCalls >= COMMENT_CALL_BUDGET) {
           commentsFinished = false;
@@ -808,6 +853,7 @@ async function findAudienceChannels(
           commentCalls += 1;
           fetched += 1;
         } catch (error) {
+          if (error instanceof JobCancelled) throw error;
           if (error instanceof YouTubeApiError && error.code === "QUOTA") quotaStopped = true;
           commentsFinished = false;
           break;

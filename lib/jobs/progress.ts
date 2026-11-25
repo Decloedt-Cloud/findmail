@@ -1,12 +1,24 @@
 import { prisma } from "@/lib/db";
 import { progressPercent, resolveCompletionStatus } from "@/lib/jobs/state";
 
+export class JobCancelled extends Error {
+  constructor() {
+    super("Job cancelled");
+    this.name = "JobCancelled";
+  }
+}
+
 export async function isCancelled(jobId: string) {
   const job = await prisma.processingJob.findUnique({
     where: { id: jobId },
     select: { cancelRequested: true, status: true },
   });
   return !job || job.cancelRequested || job.status === "CANCELLED";
+}
+
+/** Stops a running loop. Callers catch `JobCancelled` and leave the job cancelled. */
+export async function throwIfCancelled(jobId: string) {
+  if (await isCancelled(jobId)) throw new JobCancelled();
 }
 
 export async function markRunning(jobId: string) {
