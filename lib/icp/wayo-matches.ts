@@ -4,6 +4,8 @@ import { usablePublicEmails } from "@/lib/creators/email";
 import { prisma } from "@/lib/db";
 import { ICP_MAX_SUBSCRIBERS, ICP_MIN_SUBSCRIBERS } from "@/lib/icp/audience";
 import { icpHost } from "@/lib/icp/identity";
+import { snapshotSearchLanguages } from "@/lib/icp/search-language";
+import { isSpecificLanguageChoice } from "@/lib/youtube/spoken-language";
 
 function snapshotRequestId(snapshot: unknown) {
   if (!snapshot || typeof snapshot !== "object") return "";
@@ -99,6 +101,15 @@ export async function listWayoIcpMatches(input: {
     .split(",")
     .map((code) => code.trim().toUpperCase())
     .filter((code) => /^[A-Z]{2}$/.test(code));
+  const languages = snapshotSearchLanguages(brand.snapshot);
+  const languageWhere = isSpecificLanguageChoice(languages)
+    ? {
+        OR: languages.flatMap((code) => [
+          { language: { equals: code, mode: "insensitive" as const } },
+          { language: { startsWith: `${code}-`, mode: "insensitive" as const } },
+        ]),
+      }
+    : null;
   const links = await prisma.icpChannelMatch.findMany({
     where: {
       brandIcpId: brand.id,
@@ -108,6 +119,7 @@ export async function listWayoIcpMatches(input: {
         subscriberCount: { gte: ICP_MIN_SUBSCRIBERS, lte: ICP_MAX_SUBSCRIBERS },
         AND: [
           USABLE_CONTACT,
+          ...(languageWhere ? [languageWhere] : []),
           ...(countries.length
             ? [{
                 OR: countries.map((code) => ({ country: { equals: code, mode: "insensitive" as const } })),
@@ -145,6 +157,8 @@ export async function listWayoIcpMatches(input: {
           matchedVideoUrl: true,
           matchedVideoViews: true,
           matchedVideoPublishedAt: true,
+          publishesLongForm: true,
+          publishesShorts: true,
           channelIcp: true,
           emails: {
             select: {
@@ -191,6 +205,8 @@ if (
         averageViews: creator.averageViews ?? 0,
         country: creator.country,
         language: creator.language,
+        publishesLongForm: creator.publishesLongForm,
+        publishesShorts: creator.publishesShorts,
         channelIcpName: channelIcpName(creator.channelIcp),
         email: emails[0]?.emailAddress ?? null,
         emails: emails.map((item) => item.emailAddress),

@@ -44,6 +44,8 @@ export type DiscoveredChannel = YouTubeChannel & {
   matchedVideo: MatchedVideo;
   relevanceScore: number;
   recentTitles?: string[];
+  publishesLongForm?: boolean | null;
+  publishesShorts?: boolean | null;
   instagramUrl: string | null;
   twitterUrl: string | null;
   tiktokUrl: string | null;
@@ -493,6 +495,8 @@ async function enrichActivity(
     channel.recentTitles = activity.retained.map((video) => video.title);
     channel.lastActiveAt = activity.lastActiveAt;
     channel.recentVideoPublishedAt = activity.lastActiveAt ?? channel.recentVideoPublishedAt;
+    channel.publishesLongForm = activity.publishesLongForm;
+    channel.publishesShorts = activity.publishesShorts;
 
     const matched = matchedByChannel.get(channel.id);
     const matchedDetails = matched ? details.get(matched.videoId) : undefined;

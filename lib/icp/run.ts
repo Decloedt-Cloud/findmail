@@ -21,6 +21,7 @@ import { selectCreatorsForIcp } from "@/lib/icp/select-creators";
 import { upsertMatchedChannel } from "@/lib/icp/store";
 import { YouTubeApiError, YouTubeClient, createYouTubeClient, matchesSubscriberRange, type YouTubeChannel, type YouTubeVideoDetails } from "@/lib/youtube/client";
 import { selectRecentPublicVideos } from "@/lib/youtube/metrics";
+import { channelSpokenLanguage, isSpecificLanguageChoice } from "@/lib/youtube/spoken-language";
 import { icpSearchPausedUntil, youtubeQuotaDayStart } from "@/lib/youtube/quota-day";
 
 export async function runMatchIcpChannels(processingJobId: string) {
@@ -129,7 +130,10 @@ export async function runMatchIcpChannels(processingJobId: string) {
     for (const channel of found.channels) {
       let saved;
       try {
-        saved = await upsertMatchedChannel(channel.channel, channel.publishedAt, channel.averageViews);
+        saved = await upsertMatchedChannel(channel.channel, channel.publishedAt, channel.averageViews, {
+          publishesLongForm: channel.publishesLongForm,
+          publishesShorts: channel.publishesShorts,
+        });
       } catch (error) {
         // One channel that cannot be saved must not fail the whole search. It is skipped
         // and logged, so the other channels of this batch still reach the advertiser.
@@ -504,7 +508,13 @@ async function findAudienceChannels(
   languages: string[] = [],
 ) {
   const poolTarget = target * 3;
-  const kept = new Map<string, { channel: YouTubeChannel; publishedAt: Date | null; averageViews: number | null }>();
+  const kept = new Map<string, {
+    channel: YouTubeChannel;
+    publishedAt: Date | null;
+    averageViews: number | null;
+    publishesLongForm: boolean | null;
+    publishesShorts: boolean | null;
+  }>();
   let inspected = 0;
   const filtered = {
     missingCountry: 0,
@@ -590,7 +600,13 @@ async function findAudienceChannels(
             );
             const strict = countries.length ? inRegion && inBand : matchesIcpAudience(channel);
             if (skipChannelIds.has(channel.id)) continue;
-            if (strict) kept.set(channel.id, { channel, publishedAt: null, averageViews: null });
+            if (strict) kept.set(channel.id, {
+              channel,
+              publishedAt: null,
+              averageViews: null,
+              publishesLongForm: null,
+              publishesShorts: null,
+            });
             else if (!channel.country) filtered.missingCountry += 1;
             else if (!inRegion) filtered.outsideRegion += 1;
             else if (channel.subscriberVisibility !== "PUBLIC" || channel.subscriberCount == null) filtered.hiddenSubscribers += 1;
@@ -610,7 +626,8 @@ async function findAudienceChannels(
     }
   }
   }
-  const selected = [...kept.values()].slice(0, target);
+  const pool = isSpecificLanguageChoice(languages) ? target * 2 : target;
+  const selected = [...kept.values()].slice(0, pool);
   const uploadIds = new Map<string, string[]>();
   for (const entry of selected) {
     const playlistId = entry.channel.uploadsPlaylistId;
@@ -649,10 +666,17 @@ async function findAudienceChannels(
       .filter((video): video is YouTubeVideoDetails => Boolean(video));
     const activity = selectRecentPublicVideos(videos);
     if (activity.averageViews != null) entry.averageViews = activity.averageViews;
+    entry.publishesLongForm = activity.publishesLongForm;
+    entry.publishesShorts = activity.publishesShorts;
     const active = activity.lastActiveAt ? new Date(activity.lastActiveAt) : null;
     if (active && !Number.isNaN(active.getTime())) entry.publishedAt = active;
+    if (!isSpecificLanguageChoice(languages) || details.size === 0) continue;
+    const spoken = channelSpokenLanguage(videos);
+    if (spoken && languages.includes(spoken)) entry.channel.defaultLanguage = spoken;
+    else entry.channel.defaultLanguage = "";
   }
-  return { channels: selected.slice(0, target), inspected, quotaStopped };
+  const matching = selected.filter((entry) => entry.channel.defaultLanguage !== "");
+  return { channels: matching.slice(0, target), inspected, quotaStopped };
 }
 
 async function loadChannels(ids: string[], client: YouTubeClient) {

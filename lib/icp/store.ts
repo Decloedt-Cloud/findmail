@@ -138,6 +138,7 @@ export async function upsertMatchedChannel(
   channel: YouTubeChannel,
   lastPublishedAt: Date | null,
   averageViews: number | null = null,
+  formats?: { publishesLongForm: boolean | null; publishesShorts: boolean | null } | null,
 ) {
   const shared = {
     channelName: channel.title || channel.id,
@@ -162,6 +163,12 @@ export async function upsertMatchedChannel(
       ? {
           averageViews,
           averageViewsMethod: AVERAGE_VIEWS_METHOD,
+        }
+      : {}),
+    ...(formats?.publishesLongForm != null || formats?.publishesShorts != null
+      ? {
+          publishesLongForm: formats.publishesLongForm,
+          publishesShorts: formats.publishesShorts,
         }
       : {}),
     lastMetadataSyncAt: new Date(),

@@ -61,11 +61,9 @@ describe("languageReuseFilter", () => {
     expect(languageReuseFilter(["", "  "])).toBeNull();
   });
 
-  it("keeps an unknown language and a regional variant of the requested one", () => {
+  it("keeps a regional variant of the requested language and drops an unknown one", () => {
     expect(languageReuseFilter(["en", "EN"])).toEqual({
       OR: [
-        { language: null },
-        { language: "" },
         { language: { equals: "en", mode: "insensitive" } },
         { language: { startsWith: "en-", mode: "insensitive" } },
       ],

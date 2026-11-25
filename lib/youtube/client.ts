@@ -324,7 +324,7 @@ export class YouTubeClient {
       await this.get(
         "videos",
         {
-          part: "snippet,statistics,status",
+          part: "snippet,statistics,status,contentDetails",
           id: ids.slice(0, 50).join(","),
           maxResults: "50",
         },
@@ -379,6 +379,10 @@ export type YouTubeVideoDetails = {
   viewCount: number | null;
   privacyStatus: string | null;
   liveBroadcastContent: string | null;
+  /** ISO 8601 duration from contentDetails, when videos.list asked for it. */
+  duration?: string | null;
+  defaultLanguage?: string | null;
+  defaultAudioLanguage?: string | null;
 };
 
 function mapVideo(item: unknown): YouTubeVideoDetails {
@@ -386,6 +390,7 @@ function mapVideo(item: unknown): YouTubeVideoDetails {
   const snippet = asRecord(record.snippet);
   const statistics = asRecord(record.statistics);
   const status = asRecord(record.status);
+  const content = asRecord(record.contentDetails);
   const views = statistics.viewCount;
   const viewCount = typeof views === "string" || typeof views === "number" ? Number(views) : null;
   return {
@@ -396,6 +401,9 @@ function mapVideo(item: unknown): YouTubeVideoDetails {
     viewCount: viewCount != null && Number.isFinite(viewCount) ? viewCount : null,
     privacyStatus: typeof status.privacyStatus === "string" ? status.privacyStatus : null,
     liveBroadcastContent: typeof snippet.liveBroadcastContent === "string" ? snippet.liveBroadcastContent : null,
+    duration: typeof content.duration === "string" ? content.duration : null,
+    defaultLanguage: typeof snippet.defaultLanguage === "string" ? snippet.defaultLanguage : null,
+    defaultAudioLanguage: typeof snippet.defaultAudioLanguage === "string" ? snippet.defaultAudioLanguage : null,
   };
 }
 

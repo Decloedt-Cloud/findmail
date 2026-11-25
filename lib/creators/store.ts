@@ -44,6 +44,12 @@ export async function saveDiscoveredChannel(
     lastActiveAt: dateOrNull(channel.lastActiveAt),
     averageViews: channel.averageViews,
     averageViewsMethod: channel.averageViewsMethod,
+    ...(typeof channel.publishesLongForm === "boolean" || typeof channel.publishesShorts === "boolean"
+      ? {
+          publishesLongForm: channel.publishesLongForm ?? null,
+          publishesShorts: channel.publishesShorts ?? null,
+        }
+      : {}),
     instagramUrl: channel.instagramUrl,
     twitterUrl: channel.twitterUrl,
     tiktokUrl: channel.tiktokUrl,

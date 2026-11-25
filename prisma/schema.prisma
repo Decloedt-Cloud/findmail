@@ -147,6 +147,10 @@ model Creator {
   discoverySource      DiscoverySource       @default(YOUTUBE_SEARCH)
   emailSearchStatus    EmailSearchStatus     @default(NOT_SEARCHED)
   recentVideoPublishedAt DateTime?
+  /// Latest uploads include a video longer than 60 seconds. Null until a sync measured durations.
+  publishesLongForm        Boolean?
+  /// Latest uploads include a video of 60 seconds or less.
+  publishesShorts          Boolean?
   lastActiveAt         DateTime?
   averageViews         Int?
   averageViewsMethod   String?

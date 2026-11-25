@@ -7,25 +7,22 @@ import { selectCreatorsForIcp } from "@/lib/icp/select-creators";
 import { embedText } from "@/lib/icp/embed";
 import { nearestStoredCreatorIds } from "@/lib/icp/vector-search";
 import { activeSince, hasEnoughViews } from "@/lib/youtube/qualify";
+import { isSpecificLanguageChoice } from "@/lib/youtube/spoken-language";
 
 /** How many on-topic channels one DeepSeek call can read. The catalog itself is not cut to this size. */
 const MODEL_CANDIDATE_LIMIT = 40;
 
-/** A requested language keeps a channel that publishes in it, in a regional variant (`en` covers `en-GB`), or whose language was never stored. */
+/** A requested language keeps a channel that publishes in it, or in a regional variant (`en` covers `en-GB`). An unknown language is not that language. */
 export function languageReuseFilter(codes: string[]): Prisma.CreatorWhereInput | null {
   const languages = codes
     .map((code) => code.trim().toLowerCase())
     .filter((code, index, list) => code.length > 0 && list.indexOf(code) === index);
-  if (languages.length === 0) return null;
+  if (languages.length === 0 || !isSpecificLanguageChoice(languages)) return null;
   return {
-    OR: [
-      { language: null },
-      { language: "" },
-      ...languages.flatMap((code) => [
-        { language: { equals: code, mode: "insensitive" as const } },
-        { language: { startsWith: `${code}-`, mode: "insensitive" as const } },
-      ]),
-    ],
+    OR: languages.flatMap((code) => [
+      { language: { equals: code, mode: "insensitive" as const } },
+      { language: { startsWith: `${code}-`, mode: "insensitive" as const } },
+    ]),
   };
 }
 
@@ -164,9 +161,9 @@ export async function reuseStoredCreators(input: {
   searchQueries: string[];
   limit: number;
   countries?: string[];
-  /** ISO 639-1 codes. A chosen list keeps channels in one of them, a regional variant, or with no stored language. */
+  /** ISO 639-1 codes. A short list keeps channels that publish in one of them. The full language set does not filter. */
   languages?: string[];
-  /** ISO 639-1. A chosen language keeps channels in it, a regional variant, or with no stored language. */
+  /** ISO 639-1. A chosen language keeps channels that publish in it. */
   language?: string | null;
   /** Channels already proposed for another request of this onboarding. */
   excludeCreatorIds?: string[];
