@@ -61,11 +61,13 @@ describe("languageReuseFilter", () => {
     expect(languageReuseFilter(["", "  "])).toBeNull();
   });
 
-  it("keeps a regional variant of the requested language and drops an unknown one", () => {
+  it("keeps a regional variant and a channel with no language stored", () => {
     expect(languageReuseFilter(["en", "EN"])).toEqual({
       OR: [
         { language: { equals: "en", mode: "insensitive" } },
         { language: { startsWith: "en-", mode: "insensitive" } },
+        { language: null },
+        { language: "" },
       ],
     });
   });

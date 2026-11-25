@@ -12,17 +12,26 @@ import { isSpecificLanguageChoice } from "@/lib/youtube/spoken-language";
 /** How many on-topic channels one DeepSeek call can read. The catalog itself is not cut to this size. */
 const MODEL_CANDIDATE_LIMIT = 40;
 
-/** A requested language keeps a channel that publishes in it, or in a regional variant (`en` covers `en-GB`). An unknown language is not that language. */
+/**
+ * A requested language keeps a channel that publishes in it, or in a regional
+ * variant (`en` covers `en-GB`). A stored language that is a different code is
+ * out. A channel with no language stored stays: most of the catalog was saved
+ * before a language was written, and hiding those emptied the list.
+ */
 export function languageReuseFilter(codes: string[]): Prisma.CreatorWhereInput | null {
   const languages = codes
     .map((code) => code.trim().toLowerCase())
     .filter((code, index, list) => code.length > 0 && list.indexOf(code) === index);
   if (languages.length === 0 || !isSpecificLanguageChoice(languages)) return null;
   return {
-    OR: languages.flatMap((code) => [
-      { language: { equals: code, mode: "insensitive" as const } },
-      { language: { startsWith: `${code}-`, mode: "insensitive" as const } },
-    ]),
+    OR: [
+      ...languages.flatMap((code) => [
+        { language: { equals: code, mode: "insensitive" as const } },
+        { language: { startsWith: `${code}-`, mode: "insensitive" as const } },
+      ]),
+      { language: null },
+      { language: "" },
+    ],
   };
 }
 

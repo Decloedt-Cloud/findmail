@@ -7,6 +7,12 @@ import { icpHost } from "@/lib/icp/identity";
 import { snapshotSearchLanguages } from "@/lib/icp/search-language";
 import { isSpecificLanguageChoice } from "@/lib/youtube/spoken-language";
 
+function snapshotSearchPhase(snapshot: unknown): "catalog" | "writing" | "youtube" | null {
+  if (!snapshot || typeof snapshot !== "object") return null;
+  const phase = (snapshot as { searchPhase?: unknown }).searchPhase;
+  return phase === "catalog" || phase === "writing" || phase === "youtube" ? phase : null;
+}
+
 function snapshotRequestId(snapshot: unknown) {
   if (!snapshot || typeof snapshot !== "object") return "";
   const id = (snapshot as { requestId?: unknown }).requestId;
@@ -104,10 +110,14 @@ export async function listWayoIcpMatches(input: {
   const languages = snapshotSearchLanguages(brand.snapshot);
   const languageWhere = isSpecificLanguageChoice(languages)
     ? {
-        OR: languages.flatMap((code) => [
-          { language: { equals: code, mode: "insensitive" as const } },
-          { language: { startsWith: `${code}-`, mode: "insensitive" as const } },
-        ]),
+        OR: [
+          ...languages.flatMap((code) => [
+            { language: { equals: code, mode: "insensitive" as const } },
+            { language: { startsWith: `${code}-`, mode: "insensitive" as const } },
+          ]),
+          { language: null },
+          { language: "" },
+        ],
       }
     : null;
   const links = await prisma.icpChannelMatch.findMany({
@@ -219,6 +229,7 @@ if (
     status: brand.status,
     errorSummary: brand.errorSummary,
     queries: brand.searchQueries.filter((query) => query.trim()).slice(0, 4),
+    phase: snapshotSearchPhase(brand.snapshot),
     creators,
   };
 }

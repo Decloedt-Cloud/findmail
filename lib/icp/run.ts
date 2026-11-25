@@ -45,6 +45,7 @@ export async function runMatchIcpChannels(processingJobId: string) {
     where: { id: brand.id },
     data: { status: "RUNNING", errorSummary: null },
   });
+  await markSearchPhase(brand.id, brand.snapshot, "catalog");
   await prisma.processingJob.update({
     where: { id: processingJobId },
     data: { status: "RUNNING", startedAt: new Date(), progress: 10 },
@@ -93,6 +94,7 @@ export async function runMatchIcpChannels(processingJobId: string) {
       quotaStopped: false,
     };
     if (remaining > 0) {
+      await markSearchPhase(brand.id, brand.snapshot, "writing");
       const analyzed = await searchQueriesForIcp({
         brandName: brand.brandName,
         websiteUrl: brand.websiteUrl,
@@ -105,6 +107,7 @@ export async function runMatchIcpChannels(processingJobId: string) {
         where: { id: brand.id },
         data: { searchQueries: analyzed.queries, analysisNote: analyzed.note || null },
       });
+      await markSearchPhase(brand.id, brand.snapshot, "youtube");
       found = await findAudienceChannels(analyzed.queries, remaining, countries, skipChannelIds, languages);
     }
     if (reused === 0 && found.channels.length === 0) {
@@ -670,13 +673,32 @@ async function findAudienceChannels(
     entry.publishesShorts = activity.publishesShorts;
     const active = activity.lastActiveAt ? new Date(activity.lastActiveAt) : null;
     if (active && !Number.isNaN(active.getTime())) entry.publishedAt = active;
-    if (!isSpecificLanguageChoice(languages) || details.size === 0) continue;
-    const spoken = channelSpokenLanguage(videos);
-    if (spoken && languages.includes(spoken)) entry.channel.defaultLanguage = spoken;
+    if (!isSpecificLanguageChoice(languages)) continue;
+    const titled = activity.retained.length > 0 ? activity.retained : videos;
+    const spoken = channelSpokenLanguage(titled);
+    // Titles that do not agree are not another language. A channel snippet
+    // left in place was hiding those channels from the language the user asked for.
+    if (!spoken) {
+      entry.channel.defaultLanguage = null;
+      continue;
+    }
+    if (languages.includes(spoken)) entry.channel.defaultLanguage = spoken;
     else entry.channel.defaultLanguage = "";
   }
   const matching = selected.filter((entry) => entry.channel.defaultLanguage !== "");
   return { channels: matching.slice(0, target), inspected, quotaStopped };
+}
+
+/** The step the advertiser is shown. Kept off the ICP text sent to the model. */
+async function markSearchPhase(brandId: string, snapshot: unknown, phase: "catalog" | "writing" | "youtube") {
+  const base =
+    snapshot && typeof snapshot === "object" && !Array.isArray(snapshot)
+      ? { ...(snapshot as Record<string, unknown>) }
+      : {};
+  await prisma.brandIcp.update({
+    where: { id: brandId },
+    data: { snapshot: { ...base, searchPhase: phase } as Prisma.InputJsonValue },
+  });
 }
 
 async function loadChannels(ids: string[], client: YouTubeClient) {
