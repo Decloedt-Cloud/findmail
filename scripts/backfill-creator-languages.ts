@@ -10,6 +10,8 @@ import { youtubeQuotaDayStart } from "../lib/youtube/quota-day";
 // Usage: npm run db:backfill-languages -- 20
 //        npm run db:backfill-languages -- 46 videos
 //        npx tsx scripts/backfill-creator-languages.ts --limit=20
+// The daily cron sets YOUTUBE_BACKFILL_QUOTA. That caps this script's own YouTube units
+// for the current quota day and leaves the rest of YOUTUBE_DAILY_QUOTA for other work.
 // One read fills a missing language and, from the same videos, average views, the last public video, the format, and recent titles.
 // A channel whose language is already current is read without comments. A short empty language read stays pending.
 // `videos` reads only channels that already have a language and views but no stored recent videos.
@@ -74,22 +76,45 @@ function quotaError(error: unknown): boolean {
   return error instanceof YouTubeApiError && error.code === "QUOTA";
 }
 
+const BACKFILL_MARK = "language-backfill";
+
 async function openClient() {
   const daily = Number(process.env.YOUTUBE_DAILY_QUOTA || 10000);
+  const backfillBudget = Number(process.env.YOUTUBE_BACKFILL_QUOTA || 0);
+  const since = youtubeQuotaDayStart();
   const used = await prisma.apiUsage.aggregate({
     _sum: { units: true },
-    where: { provider: "youtube", createdAt: { gte: youtubeQuotaDayStart() } },
+    where: { provider: "youtube", createdAt: { gte: since } },
   });
+  const backfill = backfillBudget > 0
+    ? await prisma.apiUsage.aggregate({
+        _sum: { units: true },
+        where: {
+          provider: "youtube",
+          createdAt: { gte: since },
+          message: { startsWith: BACKFILL_MARK },
+        },
+      })
+    : null;
   let consumed = used._sum.units ?? 0;
+  let backfillUsed = backfill?._sum.units ?? 0;
+  if (backfillBudget > 0) {
+    console.log(`backfill budget: ${backfillUsed}/${backfillBudget} since ${since.toISOString()}`);
+  }
   return createYouTubeClient(
     fetch,
     async (units, operation, success, message) => {
       consumed += units;
+      if (backfillBudget > 0) backfillUsed += units;
+      const note = backfillBudget > 0 ? [BACKFILL_MARK, message].filter(Boolean).join(" ") : message;
       await prisma.apiUsage.create({
-        data: { provider: "youtube", operation, units, success, message: message?.slice(0, 300) },
+        data: { provider: "youtube", operation, units, success, message: note?.slice(0, 300) },
       });
     },
     (units) => {
+      if (backfillBudget > 0 && backfillUsed + units > backfillBudget) {
+        throw new YouTubeApiError("The language backfill has reached its YouTube quota for this period.", "QUOTA");
+      }
       if (consumed + units > daily) {
         throw new YouTubeApiError("The daily YouTube quota budget would be exceeded by the next request.", "QUOTA");
       }
@@ -210,7 +235,7 @@ async function main() {
   }
 
   const remaining = await prisma.creator.count({ where: scope });
-  if (stopped) console.log("stopped: YouTube quota reached. Run the script again to continue.");
+  if (stopped) console.log("stopped: YouTube quota reached. Wait until the quota resets, then run the script again.");
   console.log(`updated: ${updated}`);
   if (held > 0) console.log(`held: ${held}`);
   if (skipped > 0) console.log(`skipped: ${skipped}`);
