@@ -27,6 +27,9 @@ export type CreatorRow = {
   description: string | null;
   country: string | null;
   language: string | null;
+  contentCountries: string | null;
+  publishesLongForm: boolean | null;
+  publishesShorts: boolean | null;
   subscriberCount: number | null;
   subscriberVisibility: string;
   videoCount: number | null;

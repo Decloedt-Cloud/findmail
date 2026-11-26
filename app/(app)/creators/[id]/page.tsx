@@ -8,7 +8,7 @@ import { api } from "@/lib/client";
 import { icpSiteLabel } from "@/lib/icp/identity";
 import { emailStatusLabel } from "@/lib/email/status";
 import { emailOriginLabel } from "@/lib/creators/email";
-import { countryName, formatDateTime, formatNumber } from "@/lib/utils";
+import { countryName, formatDateTime, formatLabel, formatNumber, spokenLanguageLabel, statedCountryLabel } from "@/lib/utils";
 import type { CreatorRow, EmailRow } from "@/lib/types";
 import { ChannelAvatar } from "@/components/channel-avatar";
 import { ChannelIcpSection } from "@/components/channel-icp-section";
@@ -64,7 +64,9 @@ export default function CreatorDetailPage() {
           <CardHeader><CardTitle>Channel</CardTitle></CardHeader>
           <CardContent className="space-y-2 text-sm">
             <p>Country: {countryName(creator.country) || "Not provided by YouTube"}</p>
-            <p>Language: {creator.language || "Not provided"}</p>
+            <p>Language: {spokenLanguageLabel(creator.language) || "Not read"}</p>
+            <p>Stated country: {creator.contentCountries == null ? "Not read" : statedCountryLabel(creator.contentCountries) || "None"}</p>
+            <p>Format: {formatLabel(creator.publishesLongForm, creator.publishesShorts) || "Not read"}</p>
             <p className="break-words">
               ICP: {(creator.icps ?? []).length > 0
                 ? (creator.icps ?? []).map((icp) => icpSiteLabel(icp.websiteUrl, icp.brandName)).join(", ")

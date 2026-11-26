@@ -18,6 +18,7 @@
     "db:backfill-bands": "tsx scripts/backfill-company-lead-bands.ts",
     "db:backfill-embeddings": "tsx scripts/backfill-creator-embeddings.ts",
     "db:backfill-formats": "tsx scripts/backfill-creator-formats.ts",
+    "db:backfill-languages": "tsx scripts/backfill-creator-languages.ts",
     "db:check-indexes": "tsx scripts/check-company-lead-indexes.ts",
     "import:company-leads": "tsx scripts/import-company-leads-csv.ts"
   },

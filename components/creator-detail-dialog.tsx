@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { api } from "@/lib/client";
 import { icpSiteLabel } from "@/lib/icp/identity";
-import { countryName, formatDate, formatDateTime, formatNumber } from "@/lib/utils";
+import { countryName, formatDate, formatDateTime, formatLabel, formatNumber, spokenLanguageLabel, statedCountryLabel } from "@/lib/utils";
 import type { CreatorRow, EmailRow } from "@/lib/types";
 import { ChannelAvatar } from "@/components/channel-avatar";
 import { ChannelIcpSection } from "@/components/channel-icp-section";
@@ -69,6 +69,9 @@ export function CreatorDetailDialog({ creatorId, onClose }: { creatorId: string 
               <Row label="ICP" value={(creator.icps ?? []).map((icp) => icpSiteLabel(icp.websiteUrl, icp.brandName)).join(", ") || "Not linked"} />
               <Row label="Handle" value={creator.channelHandle || "Not provided"} />
               <Row label="Country" value={countryName(creator.country) || "Not provided by YouTube"} />
+              <Row label="Language" value={spokenLanguageLabel(creator.language) || "Not read"} />
+              <Row label="Stated country" value={creator.contentCountries == null ? "Not read" : statedCountryLabel(creator.contentCountries) || "None"} />
+              <Row label="Format" value={formatLabel(creator.publishesLongForm, creator.publishesShorts) || "Not read"} />
               <Row label="Subscribers" value={creator.subscriberVisibility === "PUBLIC" ? formatNumber(creator.subscriberCount) : creator.subscriberVisibility} />
               <Row label="Average views" value={creator.averageViews == null ? "Unavailable" : formatNumber(creator.averageViews)} />
               <Row label="Last public video" value={creator.lastActiveAt ? formatDateTime(creator.lastActiveAt) : "Unavailable"} />

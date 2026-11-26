@@ -14,7 +14,7 @@ import { discoverPublicEmail } from "@/lib/icp/public-email";
 import { UnrecoverableError } from "bullmq";
 import { searchQueriesForIcp } from "@/lib/icp/deepseek";
 import { snapshotSearchLanguages } from "@/lib/icp/search-language";
-import { confirmSpokenCreatorIds, refreshUncheckedLanguages, resumeUnreadCreators, skipSettledCountryMisses, skipSettledLanguageMisses } from "@/lib/icp/confirm-spoken";
+import { confirmSpokenCreatorIds, resumeUnreadCreators, skipSettledCountryMisses, skipSettledLanguageMisses } from "@/lib/icp/confirm-spoken";
 import { reuseStoredCreators } from "@/lib/icp/reuse";
 import { selectCreatorsForIcp } from "@/lib/icp/select-creators";
 import { upsertMatchedChannel } from "@/lib/icp/store";
@@ -83,30 +83,58 @@ export async function runMatchIcpChannels(processingJobId: string) {
     for (const link of own) {
       if (link.creator.youtubeChannelId) skipChannelIds.add(link.creator.youtubeChannelId);
     }
-    const catalogClient = await openMatchYouTubeClient();
-    const resumed = await resumeUnreadCreators(catalogClient, countries, languages, skipChannelIds, stop);
-    if (resumed.length > 0) {
-      await prisma.icpChannelMatch.createMany({
-        data: resumed.map((creatorId) => ({ brandIcpId: brand.id, creatorId })),
-        skipDuplicates: true,
-      });
-    }
-    await refreshUncheckedLanguages(catalogClient, own.map((link) => link.creatorId), stop);
-    const catalog = await reuseStoredCreators({
+    const catalogInput = {
       brandIcpId: brand.id,
       brandName: brand.brandName,
       snapshot: brand.snapshot,
       searchQueries: brand.searchQueries,
-      limit: target,
       countries,
       language: languages[0] ?? null,
       languages,
+    };
+    // Settled channels only. A full catalog match does not call YouTube.
+    const settled = await reuseStoredCreators({
+      ...catalogInput,
+      limit: target,
       excludeCreatorIds: excludedCreatorIds,
-      confirmIds: (ids) => confirmSpokenCreatorIds(catalogClient, ids, languages, stop),
+      settledLanguage: true,
     });
-    // `linked` is the row's total, not this run's share.
-    const reused = Math.max(0, catalog.linked - linkedBefore);
-    const remaining = Math.max(0, target - reused);
+    let reused = Math.max(0, settled.linked - linkedBefore);
+    let remaining = Math.max(0, target - reused);
+    if (remaining > 0) {
+      const catalogClient = await openMatchYouTubeClient();
+      const resumed = await resumeUnreadCreators(
+        catalogClient,
+        countries,
+        languages,
+        skipChannelIds,
+        stop,
+        remaining,
+      );
+      if (resumed.length > 0) {
+        await prisma.icpChannelMatch.createMany({
+          data: resumed.map((creatorId) => ({ brandIcpId: brand.id, creatorId })),
+          skipDuplicates: true,
+        });
+        const linkedNow = await prisma.icpChannelMatch.count({ where: { brandIcpId: brand.id } });
+        reused = Math.max(0, linkedNow - linkedBefore);
+        remaining = Math.max(0, target - reused);
+      }
+      if (remaining > 0) {
+        const linkedIds = await prisma.icpChannelMatch.findMany({
+          where: { brandIcpId: brand.id },
+          select: { creatorId: true },
+        });
+        const filled = await reuseStoredCreators({
+          ...catalogInput,
+          limit: remaining,
+          excludeCreatorIds: [...new Set([...excludedCreatorIds, ...linkedIds.map((row) => row.creatorId)])],
+          confirmIds: (ids) => confirmSpokenCreatorIds(catalogClient, ids, languages, stop),
+        });
+        reused = Math.max(0, filled.linked - linkedBefore);
+        remaining = Math.max(0, target - reused);
+      }
+    }
     // A catalog that did not fill this batch has not answered the site. The next
     // search is written for this ICP. Reusing "whoever was stored last" is not a result.
     let queries = brand.searchQueries;

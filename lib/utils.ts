@@ -6,6 +6,7 @@ export function cn(...inputs: ClassValue[]) {
 }
 
 const regionNames = new Intl.DisplayNames("en", { type: "region" });
+const languageNames = new Intl.DisplayNames("en", { type: "language" });
 
 export function countryName(code: string | null | undefined) {
   if (!code) return null;
@@ -18,6 +19,42 @@ export function countryName(code: string | null | undefined) {
   } catch {
     return normalized;
   }
+}
+
+/** Stored spoken codes (`fr,en`) as English names. Null when nothing is stored. */
+export function spokenLanguageLabel(value: string | null | undefined) {
+  const codes = [...new Set(
+    (value ?? "")
+      .split(",")
+      .map((code) => code.trim().toLowerCase().slice(0, 2))
+      .filter((code) => /^[a-z]{2}$/.test(code)),
+  )];
+  if (codes.length === 0) return null;
+  return codes.map((code) => {
+    try {
+      const name = languageNames.of(code);
+      return name && name.toLowerCase() !== code ? name : code;
+    } catch {
+      return code;
+    }
+  }).join(", ");
+}
+
+/** Countries read from the channel texts. Empty string means the read found none. */
+export function statedCountryLabel(value: string | null | undefined) {
+  if (value == null) return null;
+  const names = value.split(",").map((code) => countryName(code)).filter((name): name is string => Boolean(name));
+  return names.join(", ");
+}
+
+/** Long videos and Shorts. Null when the durations have not been read. */
+export function formatLabel(longForm: boolean | null | undefined, shorts: boolean | null | undefined) {
+  if (longForm == null && shorts == null) return null;
+  const parts = [
+    longForm ? "Long videos" : null,
+    shorts ? "Shorts" : null,
+  ].filter((part): part is string => Boolean(part));
+  return parts.join(", ") || "None";
 }
 
 export function formatNumber(value: number | null | undefined) {

@@ -36,6 +36,7 @@ function languageCodes(codes: string[]): string[] {
 function catalogWhere(input: {
   countries: string[];
   languages: string[];
+  settledLanguage?: boolean;
   excludeCreatorIds: string[];
   requireRecentActivity: boolean;
   model?: string;
@@ -78,6 +79,25 @@ function catalogWhere(input: {
         OR c."languageReadVersion" < ${LANGUAGE_READ_VERSION}
       )`
     : Prisma.sql`TRUE`;
+  const settledLanguageSql = input.settledLanguage && isSpecificLanguageChoice(languages)
+    ? Prisma.sql`(
+        (${Prisma.join(
+          languages.map(
+            (code) => Prisma.sql`(
+              lower(c.language) = ${code}
+              OR lower(c.language) LIKE ${`${code},%`}
+              OR lower(c.language) LIKE ${`%,${code}`}
+              OR lower(c.language) LIKE ${`%,${code},%`}
+              OR lower(c.language) LIKE ${`${code}-%`}
+              OR lower(c.language) LIKE ${`%,${code}-%`}
+            )`,
+          ),
+          " OR ",
+        )})
+        AND c."languageCheckedAt" IS NOT NULL
+        AND c."languageReadVersion" >= ${LANGUAGE_READ_VERSION}
+      )`
+    : Prisma.sql`TRUE`;
   const excludedSql = excluded.length
     ? Prisma.sql`c.id NOT IN (${Prisma.join(excluded)})`
     : Prisma.sql`TRUE`;
@@ -94,7 +114,7 @@ function catalogWhere(input: {
     AND c."subscriberCount" <= ${ICP_MAX_SUBSCRIBERS}
     AND c."channelIcp" IS NOT NULL
     AND ${countrySql}
-    AND ${languageSql}
+    AND ${input.settledLanguage && isSpecificLanguageChoice(languages) ? settledLanguageSql : languageSql}
     AND ${excludedSql}
     AND ${activitySql}
     AND ${modelSql}
@@ -130,6 +150,7 @@ export async function nearestStoredCreatorIds(input: {
   model: string;
   countries: string[];
   languages: string[];
+  settledLanguage?: boolean;
   excludeCreatorIds: string[];
   requireRecentActivity: boolean;
   limit?: number;

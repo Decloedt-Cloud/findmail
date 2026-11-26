@@ -75,4 +75,23 @@ describe("languageReuseFilter", () => {
       ],
     });
   });
+
+  it("keeps only a current read when the catalog must not call YouTube", () => {
+    expect(languageReuseFilter(["fr"], { settled: true })).toEqual({
+      AND: [
+        {
+          OR: [
+            { language: { equals: "fr", mode: "insensitive" } },
+            { language: { startsWith: "fr,", mode: "insensitive" } },
+            { language: { endsWith: ",fr", mode: "insensitive" } },
+            { language: { contains: ",fr,", mode: "insensitive" } },
+            { language: { startsWith: "fr-", mode: "insensitive" } },
+            { language: { contains: ",fr-", mode: "insensitive" } },
+          ],
+        },
+        { languageCheckedAt: { not: null } },
+        { languageReadVersion: { gte: 2 } },
+      ],
+    });
+  });
 });

@@ -17,21 +17,34 @@ const MODEL_CANDIDATE_LIMIT = 40;
  * or a regional variant (`en` covers `en-GB`). A channel not read with the
  * current rules is kept so YouTube can read it.
  */
-export function languageReuseFilter(codes: string[]): Prisma.CreatorWhereInput | null {
+export function languageReuseFilter(
+  codes: string[],
+  options?: { settled?: boolean },
+): Prisma.CreatorWhereInput | null {
   const languages = codes
     .map((code) => code.trim().toLowerCase())
     .filter((code, index, list) => code.length > 0 && list.indexOf(code) === index);
   if (languages.length === 0 || !isSpecificLanguageChoice(languages)) return null;
+  const spoken = languages.flatMap((code) => [
+    { language: { equals: code, mode: "insensitive" as const } },
+    { language: { startsWith: `${code},`, mode: "insensitive" as const } },
+    { language: { endsWith: `,${code}`, mode: "insensitive" as const } },
+    { language: { contains: `,${code},`, mode: "insensitive" as const } },
+    { language: { startsWith: `${code}-`, mode: "insensitive" as const } },
+    { language: { contains: `,${code}-`, mode: "insensitive" as const } },
+  ]);
+  if (options?.settled) {
+    return {
+      AND: [
+        { OR: spoken },
+        { languageCheckedAt: { not: null } },
+        { languageReadVersion: { gte: LANGUAGE_READ_VERSION } },
+      ],
+    };
+  }
   return {
     OR: [
-      ...languages.flatMap((code) => [
-        { language: { equals: code, mode: "insensitive" as const } },
-        { language: { startsWith: `${code},`, mode: "insensitive" as const } },
-        { language: { endsWith: `,${code}`, mode: "insensitive" as const } },
-        { language: { contains: `,${code},`, mode: "insensitive" as const } },
-        { language: { startsWith: `${code}-`, mode: "insensitive" as const } },
-        { language: { contains: `,${code}-`, mode: "insensitive" as const } },
-      ]),
+      ...spoken,
       { languageCheckedAt: null },
       { languageReadVersion: { lt: LANGUAGE_READ_VERSION } },
     ],
@@ -190,12 +203,14 @@ export async function reuseStoredCreators(input: {
   excludeCreatorIds?: string[];
   /** Drops ids whose texts do not use the requested language. */
   confirmIds?: (ids: string[]) => Promise<string[]>;
+  /** Only channels whose language was read at the current version. No YouTube call. */
+  settledLanguage?: boolean;
 }): Promise<{ eligible: number; linked: number }> {
   if (input.limit <= 0) return { eligible: 0, linked: 0 };
   const requested = input.countries?.length ? input.countries : null;
   const excluded = input.excludeCreatorIds?.filter(Boolean) ?? [];
   const languageList = [...(input.languages ?? []), ...(input.language ? [input.language] : [])];
-  const language = languageReuseFilter(languageList);
+  const language = languageReuseFilter(languageList, { settled: input.settledLanguage === true });
   const creatorSelect = {
     id: true,
     channelName: true,
@@ -224,6 +239,7 @@ export async function reuseStoredCreators(input: {
         model: embedded.model,
         countries: requested ?? [],
         languages: languageList,
+        settledLanguage: input.settledLanguage === true,
         excludeCreatorIds: excluded,
         requireRecentActivity: !requested,
       });
