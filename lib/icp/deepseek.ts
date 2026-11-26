@@ -1,21 +1,23 @@
 import { logger } from "@/lib/logger";
 import { parseSearchQueries } from "@/lib/icp/queries";
 import { searchPhraseRule } from "@/lib/icp/search-language";
+import type { DomainProfile } from "@/lib/icp/domain-types";
 
-function systemPrompt(language: string | null, extra: string[] = []) {
+function systemPrompt(domain: DomainProfile, language: string | null, extra: string[] = []) {
   return [
   "You turn a simplified advertiser ICP into YouTube search queries.",
   "Return JSON only: {\"queries\": string[], \"note\": string}.",
-  "Write 3 or 4 short search phrases, 2 to 6 words, that would find public videos whose viewers match this ICP.",
+  `The site's verified domain is fixed: ${domain.path} (${domain.label}). Do not reinterpret it.`,
+  "Write 3 or 4 short search phrases, 2 to 6 words, that find public videos specifically about this domain.",
   searchPhraseRule(language, extra),
-  "Search for the educational, professional, or entertainment topics the target people watch, not the advertiser's product.",
-  "For a B2B product, target the profession and its day-to-day work, problems, skills, and goals.",
-  "The first phrase is special: write only the broad profession or audience topic in 2 or 3 words.",
-  "Examples of a first phrase: veterinary medicine, software engineering, personal finance, skincare.",
-  "Do not add management, workflow, productivity, records, software, or another problem or product qualifier to the first phrase.",
-  "The remaining phrases may describe day-to-day work, problems, skills, and goals.",
+  "The domain is mandatory: never search broad interests merely because the same audience might watch them.",
+  "For a clothing site, search fashion, clothing, apparel, styling, outfits, or sewing—not travel, cameras, AI, generic digital content, or education.",
+  "For a B2B product, keep every phrase inside the customer's profession or industry domain.",
+  "The first phrase is the broad domain in 2 or 3 words.",
+  "Examples: fashion styling, veterinary medicine, software engineering, personal finance, skincare.",
+  "The remaining phrases are direct subdomains, practices, problems, or skills within that same domain.",
   "Avoid brand names, domains, software, app, platform, product features, review, tutorial, and demo unless the audience itself watches that exact product category.",
-  "Use the ICP name, problems, goals, and interests. Do not name specific channels or people.",
+  "Use the offer and ICP only to understand the domain. Do not name specific channels or people.",
   "The site theme is the homepage hero. If the ICP also names another theme as an example, a logo, or a blog, search the hero theme only.",
 ].join(" ");
 }
@@ -24,6 +26,7 @@ export async function searchQueriesForIcp(input: {
   brandName: string;
   websiteUrl: string;
   snapshot: unknown;
+  domain: DomainProfile;
   language?: string | null;
   languages?: string[];
 }) {
@@ -43,7 +46,7 @@ export async function searchQueriesForIcp(input: {
       max_tokens: 1200,
       response_format: { type: "json_object" },
       messages: [
-        { role: "system", content: systemPrompt(input.language ?? null, input.languages ?? []) },
+        { role: "system", content: systemPrompt(input.domain, input.language ?? null, input.languages ?? []) },
         {
           role: "user",
           content: JSON.stringify({

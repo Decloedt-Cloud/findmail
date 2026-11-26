@@ -10,6 +10,7 @@ import {
 } from "@/lib/icp/audience";
 import { hasPublicContact, USABLE_CONTACT } from "@/lib/creators/contact";
 import { writeChannelIcp } from "@/lib/icp/channel-icp";
+import { ensureAdvertiserDomain } from "@/lib/icp/advertiser-domain";
 import { discoverPublicEmail } from "@/lib/icp/public-email";
 import { UnrecoverableError } from "bullmq";
 import { searchQueriesForIcp } from "@/lib/icp/deepseek";
@@ -24,6 +25,7 @@ import { contentCountryList, readContentCountries, storedCountriesCover } from "
 import { channelLanguageRead, isSpecificLanguageChoice, storedLanguageCovers } from "@/lib/youtube/spoken-language";
 import { icpSearchPausedUntil, youtubeQuotaDayStart } from "@/lib/youtube/quota-day";
 import { isCancelled, JobCancelled, throwIfCancelled } from "@/lib/jobs/progress";
+import type { RecentPublicVideoEvidence } from "@/lib/icp/domain-types";
 
 export async function runMatchIcpChannels(processingJobId: string) {
   const brand = await prisma.brandIcp.findUnique({ where: { processingJobId } });
@@ -64,6 +66,11 @@ export async function runMatchIcpChannels(processingJobId: string) {
   const stop = () => throwIfCancelled(processingJobId);
 
   try {
+    const advertiserDomain = await ensureAdvertiserDomain(brand);
+    // Links created before domain audits existed are not valid in the strict pipeline.
+    await prisma.icpChannelMatch.deleteMany({
+      where: { brandIcpId: brand.id, domainMatch: { equals: Prisma.DbNull } },
+    });
     const languages = snapshotSearchLanguages(brand.snapshot);
     const countries = snapshotCountries(brand.snapshot);
     const target = channelTarget(brand.snapshot);
@@ -88,6 +95,7 @@ export async function runMatchIcpChannels(processingJobId: string) {
       brandName: brand.brandName,
       snapshot: brand.snapshot,
       searchQueries: brand.searchQueries,
+      advertiserDomain,
       countries,
       language: languages[0] ?? null,
       languages,
@@ -103,7 +111,7 @@ export async function runMatchIcpChannels(processingJobId: string) {
     let remaining = Math.max(0, target - reused);
     if (remaining > 0) {
       const catalogClient = await openMatchYouTubeClient();
-      const resumed = await resumeUnreadCreators(
+      await resumeUnreadCreators(
         catalogClient,
         countries,
         languages,
@@ -111,15 +119,7 @@ export async function runMatchIcpChannels(processingJobId: string) {
         stop,
         remaining,
       );
-      if (resumed.length > 0) {
-        await prisma.icpChannelMatch.createMany({
-          data: resumed.map((creatorId) => ({ brandIcpId: brand.id, creatorId })),
-          skipDuplicates: true,
-        });
-        const linkedNow = await prisma.icpChannelMatch.count({ where: { brandIcpId: brand.id } });
-        reused = Math.max(0, linkedNow - linkedBefore);
-        remaining = Math.max(0, target - reused);
-      }
+      // The read only enriches candidates. The strict domain gate below owns every link.
       if (remaining > 0) {
         const linkedIds = await prisma.icpChannelMatch.findMany({
           where: { brandIcpId: brand.id },
@@ -153,6 +153,7 @@ export async function runMatchIcpChannels(processingJobId: string) {
         brandName: brand.brandName,
         websiteUrl: brand.websiteUrl,
         snapshot: brand.snapshot,
+        domain: advertiserDomain,
         language: languages[0] ?? null,
         languages,
       });
@@ -199,6 +200,7 @@ export async function runMatchIcpChannels(processingJobId: string) {
           channel.searchRegion,
           channel.languageSettled,
           channel.contentCountries,
+          channel.recentPublicVideos,
         );
       } catch (error) {
         // One channel that cannot be saved must not fail the whole search. It is skipped
@@ -229,6 +231,7 @@ export async function runMatchIcpChannels(processingJobId: string) {
           channel.searchRegion,
           channel.languageSettled,
           channel.contentCountries,
+          channel.recentPublicVideos,
         );
       } catch (error) {
         logger.warn("icp unread channel skipped", {
@@ -238,26 +241,32 @@ export async function runMatchIcpChannels(processingJobId: string) {
         });
       }
     }
-    const selectedFresh = await selectCreatorsForIcp({
+    const freshSelection = await selectCreatorsForIcp({
       brandName: brand.brandName,
       snapshot: brand.snapshot,
       searchQueries: queries,
+      advertiserDomain,
       candidates: freshCreators.map((creator) => ({
         id: creator.id,
         channelName: creator.channelName,
         description: creator.description,
         keywords: creator.keywords,
         channelIcp: creator.channelIcp,
+        recentPublicVideos: creator.recentPublicVideos,
       })),
       limit: remaining,
     });
+    const selectedFresh = freshSelection.creatorIds;
     const deepseekSelected = selectedFresh.length;
     const selectedSet = new Set(selectedFresh);
+    const freshAudits = new Map(freshSelection.audits.map((audit) => [audit.classifier.creatorId, audit]));
     for (const creatorId of selectedFresh) {
+      const audit = freshAudits.get(creatorId);
+      if (!audit) continue;
       await prisma.icpChannelMatch.upsert({
         where: { brandIcpId_creatorId: { brandIcpId: brand.id, creatorId } },
-        create: { brandIcpId: brand.id, creatorId },
-        update: {},
+        create: { brandIcpId: brand.id, creatorId, domainMatch: audit as unknown as Prisma.InputJsonValue },
+        update: { domainMatch: audit as unknown as Prisma.InputJsonValue },
       });
     }
     const orphanIds = createdCandidateIds.filter((id) => !selectedSet.has(id));
@@ -660,6 +669,7 @@ async function findAudienceChannels(
     awaitContentCountry: boolean;
     contentCountries: string | null;
     textsReady: boolean;
+    recentPublicVideos: RecentPublicVideoEvidence[];
   }>();
   const unplaced = new Map<string, {
     channel: YouTubeChannel;
@@ -673,6 +683,7 @@ async function findAudienceChannels(
     awaitContentCountry: boolean;
     contentCountries: string | null;
     textsReady: boolean;
+    recentPublicVideos: RecentPublicVideoEvidence[];
   }>();
   let inspected = 0;
   const filtered = {
@@ -752,6 +763,7 @@ async function findAudienceChannels(
               awaitContentCountry: false,
               contentCountries: null,
               textsReady: false,
+              recentPublicVideos: [],
             });
             else if (
               inBand
@@ -771,6 +783,7 @@ async function findAudienceChannels(
                 awaitContentCountry: true,
                 contentCountries: null,
                 textsReady: false,
+                recentPublicVideos: [],
               });
             }
             else if (!channel.country) filtered.missingCountry += 1;
@@ -837,6 +850,16 @@ async function findAudienceChannels(
       .map((id) => details.get(id))
       .filter((video): video is YouTubeVideoDetails => Boolean(video));
     const activity = selectRecentPublicVideos(videos);
+    const videoById = new Map(videos.map((video) => [video.id, video]));
+    entry.recentPublicVideos = activity.retained.flatMap((retained) => {
+      const video = videoById.get(retained.id);
+      return video ? [{
+        id: video.id,
+        title: video.title.slice(0, 300),
+        description: video.description.slice(0, 800),
+        publishedAt: video.publishedAt,
+      }] : [];
+    });
     if (activity.averageViews != null) entry.averageViews = activity.averageViews;
     entry.publishesLongForm = activity.publishesLongForm;
     entry.publishesShorts = activity.publishesShorts;

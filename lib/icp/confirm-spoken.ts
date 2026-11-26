@@ -6,6 +6,7 @@ import { languageReuseFilter, statedCountryClauses } from "@/lib/icp/reuse";
 import { selectRecentPublicVideos } from "@/lib/youtube/metrics";
 import { channelLanguageRead, isSpecificLanguageChoice, LANGUAGE_READ_VERSION, storedLanguageCovers } from "@/lib/youtube/spoken-language";
 import { JobCancelled } from "@/lib/jobs/progress";
+import type { RecentPublicVideoEvidence } from "@/lib/icp/domain-types";
 
 type Stop = () => Promise<void>;
 
@@ -46,6 +47,7 @@ export async function refreshUncheckedLanguages(
           language: spoken.language,
           ...(spoken.conclusive ? { languageCheckedAt: new Date(), languageReadVersion: LANGUAGE_READ_VERSION } : {}),
           ...(spoken.countries != null ? { contentCountries: spoken.countries } : {}),
+          ...(spoken.recentPublicVideos.length ? { recentPublicVideos: spoken.recentPublicVideos } : {}),
         },
       });
     } catch (error) {
@@ -119,6 +121,7 @@ export async function resumeUnreadCreators(
           language: spoken.language,
           ...(spoken.conclusive ? { languageCheckedAt: new Date(), languageReadVersion: LANGUAGE_READ_VERSION } : {}),
           ...(spoken.countries != null ? { contentCountries: spoken.countries } : {}),
+          ...(spoken.recentPublicVideos.length ? { recentPublicVideos: spoken.recentPublicVideos } : {}),
         },
       });
       const declared = (row.country || "").toUpperCase();
@@ -146,6 +149,7 @@ export type SpokenLanguageRead = {
   /** Duration of those videos. Null when none carried a duration. */
   publishesLongForm: boolean | null;
   publishesShorts: boolean | null;
+  recentPublicVideos: RecentPublicVideoEvidence[];
 };
 
 /** Language, stated country, and the view stats of one stored channel. */
@@ -163,6 +167,7 @@ export async function readSpokenLanguage(
     lastActiveAt: null,
     publishesLongForm: null,
     publishesShorts: null,
+    recentPublicVideos: [],
   };
   if (stop) await stop();
   const [channel] = await client.listChannels([youtubeChannelId]);
@@ -194,6 +199,16 @@ export async function readSpokenLanguage(
   const read = channelLanguageRead(posts);
   const countries = readContentCountries(posts);
   const activity = selectRecentPublicVideos(details);
+  const detailById = new Map(details.map((video) => [video.id, video]));
+  const recentPublicVideos = activity.retained.flatMap((retained) => {
+    const video = detailById.get(retained.id);
+    return video ? [{
+      id: video.id,
+      title: video.title.slice(0, 300),
+      description: video.description.slice(0, 800),
+      publishedAt: video.publishedAt,
+    }] : [];
+  });
   return {
     language: read.language,
     conclusive: read.conclusive,
@@ -202,6 +217,7 @@ export async function readSpokenLanguage(
     lastActiveAt: activity.lastActiveAt,
     publishesLongForm: activity.publishesLongForm,
     publishesShorts: activity.publishesShorts,
+    recentPublicVideos,
   };
 }
 
@@ -244,6 +260,7 @@ export async function confirmSpokenCreatorIds(
           language: spoken.language,
           ...(spoken.conclusive ? { languageCheckedAt: new Date(), languageReadVersion: LANGUAGE_READ_VERSION } : {}),
           ...(spoken.countries != null ? { contentCountries: spoken.countries } : {}),
+          ...(spoken.recentPublicVideos.length ? { recentPublicVideos: spoken.recentPublicVideos } : {}),
         },
       });
       if (storedLanguageCovers(spoken.language, languages)) kept.push(id);

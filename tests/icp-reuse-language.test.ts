@@ -3,11 +3,11 @@ import { catalogCreatorIds, languageReuseFilter, rankChannelsForModel, sharesAdv
 
 describe("catalogCreatorIds", () => {
   it("keeps the model choice when it selected channels", () => {
-    expect(catalogCreatorIds(["a", "b"], ["a", "b", "c"], 2)).toEqual(["a", "b"]);
+    expect(catalogCreatorIds(["a", "b"], 2)).toEqual(["a", "b"]);
   });
 
-  it("keeps the ranked channels when the model kept none", () => {
-    expect(catalogCreatorIds([], ["a", "b", "c"], 2)).toEqual(["a", "b"]);
+  it("keeps none when the domain model rejected every channel", () => {
+    expect(catalogCreatorIds([], 2)).toEqual([]);
   });
 });
 

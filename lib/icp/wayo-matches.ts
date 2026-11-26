@@ -6,6 +6,7 @@ import { ICP_MAX_SUBSCRIBERS, ICP_MIN_SUBSCRIBERS } from "@/lib/icp/audience";
 import { icpHost } from "@/lib/icp/identity";
 import { snapshotSearchLanguages } from "@/lib/icp/search-language";
 import { isSpecificLanguageChoice } from "@/lib/youtube/spoken-language";
+import { readDomainMatchAudit } from "@/lib/icp/domain-types";
 
 function snapshotSearchPhase(snapshot: unknown): "catalog" | "writing" | "youtube" | null {
   if (!snapshot || typeof snapshot !== "object") return null;
@@ -195,6 +196,8 @@ export async function listWayoIcpMatches(input: {
   const creators = links.flatMap((link) => {
     if (alreadyProposed.has(link.creator.id)) return [];
     const creator = link.creator;
+    const domainMatch = readDomainMatchAudit(link.domainMatch);
+    if (!domainMatch) return [];
     const emails = usablePublicEmails(creator.emails);
     const socials = {
       instagram: creator.instagramUrl?.trim() || null,
@@ -226,6 +229,9 @@ if (
         publishesLongForm: creator.publishesLongForm,
         publishesShorts: creator.publishesShorts,
         channelIcpName: channelIcpName(creator.channelIcp),
+        domainLabel: domainMatch.classifier.label,
+        domainEvidence: domainMatch.evidence,
+        domainConfidence: domainMatch.confidence,
         email: emails[0]?.emailAddress ?? null,
         emails: emails.map((item) => item.emailAddress),
         socials,

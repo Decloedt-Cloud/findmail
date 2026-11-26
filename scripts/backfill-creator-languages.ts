@@ -37,13 +37,14 @@ function activityData(spoken: SpokenLanguageRead) {
         ...(spoken.publishesShorts != null ? { publishesShorts: spoken.publishesShorts } : {}),
       }
     : null;
-  if (spoken.averageViews == null && !lastActiveAt && !formats) return null;
+  if (spoken.averageViews == null && !lastActiveAt && !formats && spoken.recentPublicVideos.length === 0) return null;
   return {
     ...(spoken.averageViews != null
       ? { averageViews: spoken.averageViews, averageViewsMethod: AVERAGE_VIEWS_METHOD }
       : {}),
     ...(lastActiveAt ? { lastActiveAt, recentVideoPublishedAt: lastActiveAt } : {}),
     ...(formats ?? {}),
+    ...(spoken.recentPublicVideos.length ? { recentPublicVideos: spoken.recentPublicVideos } : {}),
   };
 }
 

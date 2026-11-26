@@ -141,6 +141,8 @@ model Creator {
   languageReadVersion  Int                   @default(0)
   /// Countries stated in the channel's texts (`FR` or `FR,MA`). The YouTube checkbox stays on `country`.
   contentCountries     String?
+  /// Bounded public video evidence already fetched from YouTube for domain matching.
+  recentPublicVideos   Json?
   subscriberCount      Int?
   subscriberVisibility SubscriberVisibility  @default(UNAVAILABLE)
   videoCount           Int?
@@ -437,6 +439,9 @@ model BrandIcp {
   snapshot            Json
   searchQueries       String[]
   analysisNote        String?        @db.Text
+  /// Stable, versioned domain inferred once from the business snapshot.
+  domainProfile       Json?
+  domainInputHash     String?
   status              JobStatus      @default(QUEUED)
   matchedChannelCount Int            @default(0)
   errorSummary        String?        @db.Text
@@ -459,6 +464,8 @@ model IcpChannelMatch {
   brandIcp   BrandIcp @relation(fields: [brandIcpId], references: [id], onDelete: Cascade)
   creatorId  String
   creator    Creator  @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  /// Classifier + independent verifier evidence for this exact proposal.
+  domainMatch Json?
   createdAt  DateTime @default(now())
 
   @@unique([brandIcpId, creatorId])

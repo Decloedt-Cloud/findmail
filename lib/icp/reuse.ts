@@ -8,6 +8,7 @@ import { embedText } from "@/lib/icp/embed";
 import { nearestStoredCreatorIds } from "@/lib/icp/vector-search";
 import { activeSince, hasEnoughViews } from "@/lib/youtube/qualify";
 import { isSpecificLanguageChoice, LANGUAGE_READ_VERSION } from "@/lib/youtube/spoken-language";
+import { readRecentPublicVideos, type DomainProfile } from "@/lib/icp/domain-types";
 
 /** How many on-topic channels one DeepSeek call can read. The catalog itself is not cut to this size. */
 const MODEL_CANDIDATE_LIMIT = 40;
@@ -60,16 +61,11 @@ export function statedCountryClauses(codes: string[]): Prisma.CreatorWhereInput[
   ]);
 }
 
-/**
- * The model choice is the list when it named channels.
- * An empty choice keeps the channels already ranked for this site: nearest vectors,
- * or the closest topic overlap. It does not invent a list from the newest rows.
- */
-export function catalogCreatorIds(selected: string[], eligibleIds: string[], limit: number) {
+/** The model is the final domain gate. An empty choice means no channel fits. */
+export function catalogCreatorIds(selected: string[], limit: number) {
   if (limit <= 0) return [];
-  const source = selected.length > 0 ? selected : eligibleIds;
   const kept: string[] = [];
-  for (const id of source) {
+  for (const id of selected) {
     if (!id || kept.includes(id)) continue;
     kept.push(id);
     if (kept.length >= limit) break;
@@ -193,6 +189,7 @@ export async function reuseStoredCreators(input: {
   brandName: string;
   snapshot: unknown;
   searchQueries: string[];
+  advertiserDomain: DomainProfile;
   limit: number;
   countries?: string[];
   /** ISO 639-1 codes. Any non-empty list keeps channels that publish in one of them. */
@@ -217,6 +214,7 @@ export async function reuseStoredCreators(input: {
     description: true,
     keywords: true,
     channelIcp: true,
+    recentPublicVideos: true,
     subscriberCount: true,
     averageViews: true,
   } as const;
@@ -228,6 +226,7 @@ export async function reuseStoredCreators(input: {
     description: string | null;
     keywords: string[];
     channelIcp: unknown;
+    recentPublicVideos: unknown;
     subscriberCount: number | null;
     averageViews: number | null;
   }> = [];
@@ -297,9 +296,12 @@ export async function reuseStoredCreators(input: {
           averageViews: creator.averageViews,
         }),
       );
+  const withEvidence = passingViews.filter(
+    (creator) => readRecentPublicVideos(creator.recentPublicVideos).length > 0,
+  );
   const matched = mode === "vector"
-    ? passingViews
-    : passingViews.filter((creator) => sharesAdvertiserTopic(onTopic, channelTopicText(creator)));
+    ? withEvidence
+    : withEvidence.filter((creator) => sharesAdvertiserTopic(onTopic, channelTopicText(creator)));
   const ranked = mode === "vector"
     ? matched.slice(0, MODEL_CANDIDATE_LIMIT)
     : rankChannelsForModel(onTopic, matched, channelTopicText, MODEL_CANDIDATE_LIMIT);
@@ -316,15 +318,26 @@ export async function reuseStoredCreators(input: {
     return { eligible: matched.length, linked: 0 };
   }
 
-  const selected = await selectCreatorsForIcp({
+  // Language first: do not spend DeepSeek on channels that will fail the spoken filter.
+  const languageReadyIds = input.confirmIds
+    ? await input.confirmIds(ranked.map((creator) => creator.id))
+    : ranked.map((creator) => creator.id);
+  const languageReady = new Set(languageReadyIds);
+  const domainCandidates = ranked.filter((creator) => languageReady.has(creator.id));
+  if (domainCandidates.length === 0) {
+    const linked = await prisma.icpChannelMatch.count({ where: { brandIcpId: input.brandIcpId } });
+    return { eligible: matched.length, linked };
+  }
+
+  const selection = await selectCreatorsForIcp({
     brandName: input.brandName,
     snapshot: input.snapshot,
     searchQueries: input.searchQueries,
-    candidates: ranked,
+    advertiserDomain: input.advertiserDomain,
+    candidates: domainCandidates,
     limit: input.limit,
   });
-  const picked = catalogCreatorIds(selected, ranked.map((creator) => creator.id), input.limit);
-  const ids = input.confirmIds ? await input.confirmIds(picked) : picked;
+  const ids = catalogCreatorIds(selection.creatorIds, input.limit);
   if (ids.length === 0) {
     const linked = await prisma.icpChannelMatch.count({ where: { brandIcpId: input.brandIcpId } });
     logger.info("icp catalog reuse", {
@@ -332,14 +345,20 @@ export async function reuseStoredCreators(input: {
       mode,
       pool: candidates.length,
       eligible: matched.length,
-      sent: ranked.length,
+      sent: domainCandidates.length,
       selected: 0,
       linked,
     });
     return { eligible: matched.length, linked };
   }
+  const audits = new Map(selection.audits.map((audit) => [audit.classifier.creatorId, audit]));
   await prisma.icpChannelMatch.createMany({
-    data: ids.map((creatorId) => ({ brandIcpId: input.brandIcpId, creatorId })),
+    data: ids.flatMap((creatorId) => {
+      const audit = audits.get(creatorId);
+      return audit
+        ? [{ brandIcpId: input.brandIcpId, creatorId, domainMatch: audit as unknown as Prisma.InputJsonValue }]
+        : [];
+    }),
     skipDuplicates: true,
   });
   const linked = await prisma.icpChannelMatch.count({ where: { brandIcpId: input.brandIcpId } });
@@ -348,8 +367,8 @@ export async function reuseStoredCreators(input: {
     mode,
     pool: candidates.length,
     eligible: matched.length,
-    sent: ranked.length,
-    selected: selected.length,
+    sent: domainCandidates.length,
+    selected: selection.creatorIds.length,
     linked,
   });
   return { eligible: matched.length, linked };

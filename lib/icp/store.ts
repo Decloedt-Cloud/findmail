@@ -5,6 +5,7 @@ import { logger } from "@/lib/logger";
 import { rememberCreatorEmbedding } from "@/lib/icp/vector-search";
 import { AVERAGE_VIEWS_METHOD } from "@/lib/youtube/metrics";
 import { LANGUAGE_READ_VERSION } from "@/lib/youtube/spoken-language";
+import type { RecentPublicVideoEvidence } from "@/lib/icp/domain-types";
 import { extractPublicContacts } from "@/lib/youtube/contacts";
 
 function channelUrl(id: string, customUrl: string | null) {
@@ -149,6 +150,7 @@ export async function upsertMatchedChannel(
   discoveryRegion?: string | null,
   languageSettled = false,
   contentCountries?: string | null,
+  recentPublicVideos: RecentPublicVideoEvidence[] = [],
 ) {
   const shared = {
     channelName: channel.title || channel.id,
@@ -196,6 +198,7 @@ export async function upsertMatchedChannel(
         ? { language }
         : {}),
     ...(contentCountries != null ? { contentCountries } : {}),
+    ...(recentPublicVideos.length ? { recentPublicVideos } : {}),
   });
   await attachDescriptionContacts(creator.id, channel.description || "");
   await rememberCreatorEmbedding(creator.id).catch((error) => {
