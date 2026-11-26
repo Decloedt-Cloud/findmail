@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import "../lib/load-env";
 import { prisma } from "../lib/db";
 import { readSpokenLanguage, type SpokenLanguageRead } from "../lib/icp/confirm-spoken";
@@ -7,9 +8,11 @@ import { createYouTubeClient, YouTubeApiError } from "../lib/youtube/client";
 import { youtubeQuotaDayStart } from "../lib/youtube/quota-day";
 
 // Usage: npm run db:backfill-languages -- 20
+//        npm run db:backfill-languages -- 46 videos
 //        npx tsx scripts/backfill-creator-languages.ts --limit=20
-// One read fills a missing language and, from the same videos, average views, the last public video, and the format.
+// One read fills a missing language and, from the same videos, average views, the last public video, the format, and recent titles.
 // A channel whose language is already current is read without comments. A short empty language read stays pending.
+// `videos` reads only channels that already have a language and views but no stored recent videos.
 
 const MAX_LOT = 200;
 
@@ -21,9 +24,17 @@ const viewsPending = {
   OR: [{ averageViews: null }, { lastActiveAt: null }],
 };
 
+const videosPending = {
+  languageCheckedAt: { not: null },
+  languageReadVersion: { gte: LANGUAGE_READ_VERSION },
+  averageViews: { not: null },
+  lastActiveAt: { not: null },
+  recentPublicVideos: { equals: Prisma.DbNull },
+};
+
 const pendingWhere = {
   hidden: false,
-  OR: [languagePending, viewsPending],
+  OR: [languagePending, viewsPending, videosPending],
 };
 
 const STATS_SAMPLE = 50;
@@ -53,6 +64,10 @@ function takeLimit(): number {
   const bare = process.argv.slice(2).find((arg) => /^\d+$/.test(arg));
   const parsed = Number(flagged ?? bare);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : 0;
+}
+
+function videosOnly(): boolean {
+  return process.argv.includes("videos");
 }
 
 function quotaError(error: unknown): boolean {
@@ -91,14 +106,18 @@ async function main() {
     return;
   }
 
-  const before = await prisma.creator.count({ where: pendingWhere });
-  const languageRows = await prisma.creator.findMany({
-    where: { hidden: false, ...languagePending },
-    orderBy: [{ languageReadVersion: "asc" }, { id: "asc" }],
-    take: requested,
-    select: { id: true, youtubeChannelId: true, languageCheckedAt: true, languageReadVersion: true },
-  });
-  const viewRows = languageRows.length < requested
+  const onlyVideos = videosOnly();
+  const scope = onlyVideos ? { hidden: false, ...videosPending } : pendingWhere;
+  const before = await prisma.creator.count({ where: scope });
+  const languageRows = onlyVideos
+    ? []
+    : await prisma.creator.findMany({
+        where: { hidden: false, ...languagePending },
+        orderBy: [{ languageReadVersion: "asc" }, { id: "asc" }],
+        take: requested,
+        select: { id: true, youtubeChannelId: true, languageCheckedAt: true, languageReadVersion: true },
+      });
+  const viewRows = !onlyVideos && languageRows.length < requested
     ? await prisma.creator.findMany({
         where: {
           hidden: false,
@@ -112,9 +131,23 @@ async function main() {
         select: { id: true, youtubeChannelId: true, languageCheckedAt: true, languageReadVersion: true },
       })
     : [];
-  const rows = [...languageRows, ...viewRows];
+  const taken = [...languageRows, ...viewRows];
+  const videoRows = taken.length < requested
+    ? await prisma.creator.findMany({
+        where: {
+          hidden: false,
+          ...videosPending,
+          ...(taken.length > 0 ? { id: { notIn: taken.map((row) => row.id) } } : {}),
+        },
+        orderBy: { id: "asc" },
+        take: requested - taken.length,
+        select: { id: true, youtubeChannelId: true, languageCheckedAt: true, languageReadVersion: true },
+      })
+    : [];
+  const rows = [...taken, ...videoRows];
+  const waiting = onlyVideos ? "recent videos" : "a language, views, or recent videos";
   console.log(
-    `reading ${rows.length} of ${before} channel(s) waiting for a language or for views (${languageRows.length} language, ${viewRows.length} views)`,
+    `reading ${rows.length} of ${before} channel(s) waiting for ${waiting} (${languageRows.length} language, ${viewRows.length} views, ${videoRows.length} videos)`,
   );
   if (rows.length === 0) {
     console.log("updated: 0");
@@ -163,7 +196,9 @@ async function main() {
       const languageLabel = languageSettled ? spoken.language || "none" : languageDue ? "language held" : "language kept";
       const viewsLabel = spoken.averageViews != null || spoken.lastActiveAt ? "views" : "views held";
       const formatLabel = spoken.publishesLongForm != null || spoken.publishesShorts != null ? "format" : "format held";
-      console.log(`${index + 1}/${rows.length} ${row.youtubeChannelId} ${languageLabel}, ${viewsLabel}, ${formatLabel}`);
+      const videosLabel = spoken.recentPublicVideos.length ? "videos" : "videos held";
+      if (!languageDue && spoken.recentPublicVideos.length === 0) held += 1;
+      console.log(`${index + 1}/${rows.length} ${row.youtubeChannelId} ${languageLabel}, ${viewsLabel}, ${formatLabel}, ${videosLabel}`);
     } catch (error) {
       if (quotaError(error)) {
         stopped = true;
@@ -174,7 +209,7 @@ async function main() {
     }
   }
 
-  const remaining = await prisma.creator.count({ where: pendingWhere });
+  const remaining = await prisma.creator.count({ where: scope });
   if (stopped) console.log("stopped: YouTube quota reached. Run the script again to continue.");
   console.log(`updated: ${updated}`);
   if (held > 0) console.log(`held: ${held}`);
