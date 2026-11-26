@@ -1,7 +1,8 @@
 #!/bin/sh
-# Fill stored channels until this job has used 5000 YouTube units in the current
-# quota day, or until none are left. YouTube resets the quota at midnight Pacific.
-# A later run the same day sees the units already recorded and stops.
+# Fill stored channels until all YouTube units recorded for the current quota day
+# reach 5000, including units matching already used, or until none are left.
+# YouTube resets the quota at midnight Pacific. A later run the same day sees
+# that total and stops.
 #
 # Crontab, 10 minutes after that reset. CRON_TZ keeps the hour on Pacific time
 # whether the server clock is UTC or not:
