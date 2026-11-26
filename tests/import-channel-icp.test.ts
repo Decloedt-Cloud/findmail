@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ImportRow } from "@/lib/csv";
+import { readSpokenLanguage } from "@/lib/icp/confirm-spoken";
 import { importRow } from "@/lib/jobs/import";
 import { writeChannelIcp } from "@/lib/icp/channel-icp";
 import { createYouTubeClient } from "@/lib/youtube/client";
@@ -9,7 +10,7 @@ const db = vi.hoisted(() => ({
     creator: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn() },
     dedupEvent: { create: vi.fn() },
     emailContact: { findUnique: vi.fn(), create: vi.fn() },
-    apiUsage: { create: vi.fn() },
+    apiUsage: { create: vi.fn(), aggregate: vi.fn() },
   },
 }));
 
@@ -20,6 +21,10 @@ vi.mock("@/lib/db", () => ({
 
 vi.mock("@/lib/icp/channel-icp", () => ({
   writeChannelIcp: vi.fn(),
+}));
+
+vi.mock("@/lib/icp/confirm-spoken", () => ({
+  readSpokenLanguage: vi.fn(),
 }));
 
 vi.mock("@/lib/youtube/client", async (importOriginal) => ({
@@ -97,7 +102,28 @@ beforeEach(() => {
   ]);
   db.prisma.dedupEvent.create.mockResolvedValue({});
   db.prisma.apiUsage.create.mockResolvedValue({});
+  db.prisma.apiUsage.aggregate.mockResolvedValue({ _sum: { units: 0 } });
+  vi.mocked(readSpokenLanguage).mockResolvedValue({
+    language: "fr",
+    conclusive: true,
+    countries: "FR",
+    averageViews: 1200,
+    lastActiveAt: "2026-11-01T00:00:00.000Z",
+    publishesLongForm: true,
+    publishesShorts: false,
+    recentPublicVideos: [{ id: "v1", title: "Une vidéo", description: "Jeux", publishedAt: "2026-11-01T00:00:00.000Z" }],
+  });
 });
+
+const completeCriteria = {
+  languageCheckedAt: new Date("2026-11-01T00:00:00.000Z"),
+  languageReadVersion: 2,
+  averageViews: 1200,
+  lastActiveAt: new Date("2026-11-01T00:00:00.000Z"),
+  recentPublicVideos: [{ id: "v1", title: "Une vidéo", description: "Jeux", publishedAt: "2026-11-01T00:00:00.000Z" }],
+  publishesLongForm: true,
+  publishesShorts: false,
+};
 
 describe("CSV import builds the channel ICP", () => {
   it("stores a channel ICP on a new creator, built from YouTube details", async () => {
@@ -113,6 +139,20 @@ describe("CSV import builds the channel ICP", () => {
     expect(db.prisma.creator.create).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ channelIcp: profile }) }),
     );
+    expect(readSpokenLanguage).toHaveBeenCalledWith(youtube, CHANNEL_ID, undefined, undefined);
+    expect(db.prisma.creator.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "c1" },
+        data: expect.objectContaining({
+          language: "fr",
+          contentCountries: "FR",
+          averageViews: 1200,
+          publishesLongForm: true,
+          publishesShorts: false,
+          recentPublicVideos: expect.arrayContaining([expect.objectContaining({ id: "v1" })]),
+        }),
+      }),
+    );
   });
 
   it("fills the ICP of an existing creator that has none, even with SKIP", async () => {
@@ -123,16 +163,18 @@ describe("CSV import builds the channel ICP", () => {
     expect(result.duplicate).toBe(true);
     expect(writeChannelIcp).toHaveBeenCalledTimes(1);
     expect(db.prisma.creator.update).toHaveBeenCalledWith({ where: { id: "c1" }, data: { channelIcp: profile } });
+    expect(readSpokenLanguage).toHaveBeenCalled();
     expect(db.prisma.creator.create).not.toHaveBeenCalled();
   });
 
   it("does not recompute the ICP of an existing creator that already has one under SKIP", async () => {
-    db.prisma.creator.findUnique.mockResolvedValue({ id: "c1", channelIcp: profile, channelName: "Salut Les Noobs" });
+    db.prisma.creator.findUnique.mockResolvedValue({ id: "c1", channelIcp: profile, channelName: "Salut Les Noobs", ...completeCriteria });
 
     const result = await importRow(row, "SKIP");
 
     expect(result.duplicate).toBe(true);
     expect(writeChannelIcp).not.toHaveBeenCalled();
+    expect(readSpokenLanguage).not.toHaveBeenCalled();
     expect(db.prisma.creator.update).not.toHaveBeenCalled();
   });
 });

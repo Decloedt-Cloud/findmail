@@ -9,8 +9,10 @@ import { isCancelled, markRunning, recordJobError, refreshJobCounts, updateProgr
 import { ensureDataDirs, paths } from "@/lib/paths";
 import { assertPublicHttpUrl } from "@/lib/ssrf";
 import { writeChannelIcp } from "@/lib/icp/channel-icp";
+import { fillMissingMatchCriteria, type StoredMatchCriteria } from "@/lib/jobs/import-criteria";
 import { logger } from "@/lib/logger";
 import { YouTubeApiError, createYouTubeClient, parseYouTubeReference, type YouTubeClient } from "@/lib/youtube/client";
+import { youtubeQuotaDayStart } from "@/lib/youtube/quota-day";
 
 type StoredRow = { input?: ImportRow };
 
@@ -163,18 +165,34 @@ export async function importRow(row: ImportRow, strategy: DuplicateStrategy) {
   let keywords: string[] = [];
   let detailsLoaded = false;
   let client: YouTubeClient | null = null;
-  const youtube = () => {
-    client ??= createYouTubeClient(fetch, async (units, operation, success, message) => {
-      await prisma.apiUsage.create({ data: { provider: "youtube", operation, units, success, message } });
+  const youtube = async () => {
+    if (client) return client;
+    const daily = Number(process.env.YOUTUBE_DAILY_QUOTA || 10000);
+    const used = await prisma.apiUsage.aggregate({
+      _sum: { units: true },
+      where: { provider: "youtube", createdAt: { gte: youtubeQuotaDayStart() } },
     });
+    let consumed = used._sum.units ?? 0;
+    client = createYouTubeClient(
+      fetch,
+      async (units, operation, success, message) => {
+        consumed += units;
+        await prisma.apiUsage.create({ data: { provider: "youtube", operation, units, success, message } });
+      },
+      (units) => {
+        if (consumed + units > daily) {
+          throw new YouTubeApiError("The daily YouTube quota budget would be exceeded by the next request.", "QUOTA");
+        }
+      },
+    );
     return client;
   };
   const reference = parseYouTubeReference(row.channelUrl || row.videoUrl || row.channelId || "");
   if (!channelId && reference.channelId) channelId = reference.channelId;
   if (!channelId && (reference.videoId || reference.handle)) {
-    if (reference.videoId) channelId = await youtube().channelIdForVideo(reference.videoId);
+    if (reference.videoId) channelId = await (await youtube()).channelIdForVideo(reference.videoId);
     if (!channelId && reference.handle) {
-      const channel = await youtube().channelForHandle(reference.handle);
+      const channel = await (await youtube()).channelForHandle(reference.handle);
       channelId = channel?.id ?? null;
       resolvedName = resolvedName || channel?.title || null;
       description = channel?.description ?? null;
@@ -188,11 +206,12 @@ export async function importRow(row: ImportRow, strategy: DuplicateStrategy) {
   handle = handle ?? reference.handle ?? null;
 
   const existing = await prisma.creator.findUnique({ where: { youtubeChannelId: channelId } });
+  const storedCriteria = existing ? criteriaOf(existing) : null;
   // ICP is needed for new channels, for existing channels without one, and when UPDATE refreshes them.
   const needsIcp = !existing?.channelIcp || strategy === "UPDATE";
   if (needsIcp && !detailsLoaded) {
     // The CSV has no description or keywords, so read them from YouTube to build the ICP.
-    const [channel] = await youtube().listChannels([channelId]);
+    const [channel] = await (await youtube()).listChannels([channelId]);
     if (channel) {
       resolvedName = resolvedName || channel.title || null;
       description = channel.description || description;
@@ -221,6 +240,7 @@ export async function importRow(row: ImportRow, strategy: DuplicateStrategy) {
         message: error instanceof Error ? error.message.slice(0, 300) : "unknown",
       });
     });
+    await fillMissingMatchCriteria(await youtube(), existing.id, channelId, storedCriteria);
     return { creatorId: existing.id, duplicate: true };
   }
 
@@ -315,5 +335,26 @@ export async function importRow(row: ImportRow, strategy: DuplicateStrategy) {
       message: error instanceof Error ? error.message.slice(0, 300) : "unknown",
     });
   });
+  await fillMissingMatchCriteria(await youtube(), creatorId, channelId, storedCriteria);
   return { creatorId, duplicate };
+}
+
+function criteriaOf(creator: {
+  languageCheckedAt: Date | null;
+  languageReadVersion: number;
+  averageViews: number | null;
+  lastActiveAt: Date | null;
+  recentPublicVideos: unknown;
+  publishesLongForm: boolean | null;
+  publishesShorts: boolean | null;
+}): StoredMatchCriteria {
+  return {
+    languageCheckedAt: creator.languageCheckedAt,
+    languageReadVersion: creator.languageReadVersion,
+    averageViews: creator.averageViews,
+    lastActiveAt: creator.lastActiveAt,
+    recentPublicVideos: creator.recentPublicVideos,
+    publishesLongForm: creator.publishesLongForm,
+    publishesShorts: creator.publishesShorts,
+  };
 }

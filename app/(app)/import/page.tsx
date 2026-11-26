@@ -30,7 +30,7 @@ export default function ImportPage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Import CSV</h1>
         <p className="max-w-3xl text-sm text-muted-foreground">
-          Accepted columns include channel id, name, URL, video URL, country, subscribers, website, and email. Imported emails keep CSV provenance and are not marked verified.
+          Accepted columns include channel id, name, URL, video URL, country, subscribers, website, and email. Imported emails keep CSV provenance and are not marked verified. A channel that is missing its language, views, format, or recent videos is read from YouTube during the import.
         </p>
       </div>
       <Card>
