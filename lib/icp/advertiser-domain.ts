@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { domainInputHash, MIN_DOMAIN_CONFIDENCE, readDomainProfile, type DomainProfile } from "@/lib/icp/domain-types";
-import { DOMAIN_TAXONOMY_VERSION, domainTaxonomyPrompt, isDomainPath } from "@/lib/icp/domain-taxonomy";
+import { domainInputHash, domainProfileFromReply, MIN_DOMAIN_CONFIDENCE, readDomainProfile, type DomainProfile } from "@/lib/icp/domain-types";
+import { DOMAIN_TAXONOMY_VERSION, domainTaxonomyPrompt } from "@/lib/icp/domain-taxonomy";
 
 type BrandDomainInput = {
   id: string;
@@ -12,38 +12,44 @@ type BrandDomainInput = {
   domainInputHash: string | null;
 };
 
-function parseProfile(raw: string, model: string): DomainProfile | null {
-  const start = raw.indexOf("{");
-  const end = raw.lastIndexOf("}");
-  if (start < 0 || end <= start) return null;
-  let value: unknown;
+const VIDEO_HOST = /(^|\.)((youtube|youtu\.be|instagram|tiktok|facebook|twitter|x)\.com|youtu\.be)$/i;
+
+function textOf(value: unknown, max = 800): string {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, max) : "";
+}
+
+/** A video link is the creative, not the company site. */
+function commercialSite(raw: string): string | null {
   try {
-    value = JSON.parse(raw.slice(start, end + 1));
+    const host = new URL(raw).hostname.replace(/^www\./, "");
+    return VIDEO_HOST.test(host) ? null : raw.trim();
   } catch {
     return null;
   }
-  if (!value || typeof value !== "object") return null;
-  const row = value as { path?: unknown; label?: unknown; evidence?: unknown; confidence?: unknown };
-  const evidence = Array.isArray(row.evidence)
-    ? row.evidence.filter((item): item is string => typeof item === "string" && Boolean(item.trim())).slice(0, 5)
-    : [];
-  if (
-    !isDomainPath(row.path)
-    || typeof row.label !== "string"
-    || !row.label.trim()
-    || typeof row.confidence !== "number"
-    || row.confidence < MIN_DOMAIN_CONFIDENCE
-    || row.confidence > 1
-    || evidence.length === 0
-  ) return null;
+}
+
+function businessBrief(brand: BrandDomainInput) {
+  const snapshot = brand.snapshot && typeof brand.snapshot === "object"
+    ? brand.snapshot as Record<string, unknown>
+    : {};
+  const request = snapshot.request && typeof snapshot.request === "object"
+    ? snapshot.request as Record<string, unknown>
+    : {};
+  const rows = (value: unknown) => Array.isArray(value) ? value : [];
   return {
-    taxonomyVersion: DOMAIN_TAXONOMY_VERSION,
-    path: row.path,
-    label: row.label.trim().slice(0, 120),
-    evidence: evidence.map((item) => item.replace(/\s+/g, " ").trim().slice(0, 300)),
-    confidence: row.confidence,
-    model,
-    classifiedAt: new Date().toISOString(),
+    brandName: brand.brandName,
+    websiteUrl: commercialSite(brand.websiteUrl),
+    adFormat: textOf(request.kind, 40) || null,
+    requestTitle: textOf(request.title, 200) || null,
+    description: textOf(request.description, 2000) || textOf(snapshot.matchingText, 2000) || null,
+    offers: rows(snapshot.offers).slice(0, 4).map((item) => {
+      const row = item && typeof item === "object" ? item as Record<string, unknown> : {};
+      return { name: textOf(row.name, 120), description: textOf(row.description) };
+    }),
+    icps: rows(snapshot.icps).slice(0, 3).map((item) => {
+      const row = item && typeof item === "object" ? item as Record<string, unknown> : {};
+      return { name: textOf(row.name, 120), description: textOf(row.description) };
+    }),
   };
 }
 
@@ -88,11 +94,13 @@ export async function ensureAdvertiserDomain(brand: BrandDomainInput): Promise<D
         {
           role: "system",
           content: [
-            "Classify the advertiser's single primary business domain.",
-            "Use only the supplied offer, request, and ICP. Do not infer a broad audience hobby.",
-            "Choose exactly one canonical path from the taxonomy below.",
-            "Cite concise concrete evidence from the supplied business data.",
-            `Use confidence below ${MIN_DOMAIN_CONFIDENCE} when the primary domain is ambiguous.`,
+            "Classify the advertiser's single primary product domain.",
+            "adFormat is how the ad is published. It is not what the company sells.",
+            "A missing websiteUrl means the link was a video. Ignore it.",
+            "Copy one path exactly from the taxonomy. A more specific product still uses that branch, such as fashion/footwear/general for sports shoes.",
+            "When the description names the product, set confidence at or above 0.85.",
+            "Set confidence below 0.85 only when the description never says what is sold.",
+            "Cite concise evidence from the description.",
             'Return JSON only: {"path":"","label":"","evidence":[""],"confidence":0}.',
             `Taxonomy version ${DOMAIN_TAXONOMY_VERSION}:`,
             domainTaxonomyPrompt(),
@@ -100,11 +108,7 @@ export async function ensureAdvertiserDomain(brand: BrandDomainInput): Promise<D
         },
         {
           role: "user",
-          content: JSON.stringify({
-            brandName: brand.brandName,
-            websiteUrl: brand.websiteUrl,
-            business: brand.snapshot,
-          }),
+          content: JSON.stringify(businessBrief(brand)),
         },
       ],
     }),
@@ -112,8 +116,11 @@ export async function ensureAdvertiserDomain(brand: BrandDomainInput): Promise<D
   });
   if (!response.ok) throw new Error("We couldn't classify the advertiser domain.");
   const body = (await response.json().catch(() => ({}))) as { choices?: { message?: { content?: string } }[] };
-  const profile = parseProfile(body.choices?.[0]?.message?.content ?? "", model);
-  if (!profile) throw new Error("The advertiser domain was not clear enough to match channels safely.");
+  const read = domainProfileFromReply(body.choices?.[0]?.message?.content ?? "", model);
+  if (!read.profile) {
+    throw new Error(`The advertiser domain was not clear enough to match channels safely. ${read.reason}`);
+  }
+  const profile = read.profile;
   await prisma.brandIcp.update({
     where: { id: brand.id },
     data: { domainProfile: profile as unknown as Prisma.InputJsonValue, domainInputHash: hash },

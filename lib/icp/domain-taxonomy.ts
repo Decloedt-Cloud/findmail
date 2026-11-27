@@ -54,6 +54,24 @@ export function isDomainPath(value: unknown): value is string {
   return typeof value === "string" && DOMAIN_PATH_SET.has(value);
 }
 
+/** A more specific reply still belongs to the listed branch. `fashion/footwear/sneakers` is footwear. */
+export function canonicalizeDomainPath(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase().replace(/\s+/g, "");
+  if (!normalized) return null;
+  if (isDomainPath(normalized)) return normalized;
+  const parts = normalized.split("/").filter(Boolean);
+  if (parts.length >= 2) {
+    const leaf = `${parts[0]}/${parts[1]}/general`;
+    if (isDomainPath(leaf)) return leaf;
+  }
+  if (parts.length >= 1) {
+    const top = `${parts[0]}/general/general`;
+    if (isDomainPath(top)) return top;
+  }
+  return null;
+}
+
 export function domainTaxonomyPrompt() {
   return DOMAIN_PATHS.join("\n");
 }

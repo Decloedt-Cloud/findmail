@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { DOMAIN_TAXONOMY_VERSION, isDomainPath } from "@/lib/icp/domain-taxonomy";
+import { canonicalizeDomainPath, DOMAIN_TAXONOMY_VERSION, isDomainPath } from "@/lib/icp/domain-taxonomy";
 
 export const MIN_DOMAIN_CONFIDENCE = 0.85;
 
@@ -129,6 +129,59 @@ export function readDomainMatchAudit(value: unknown): DomainMatchAudit | null {
     evidence,
     model: typeof row.model === "string" ? row.model : "",
     verifiedAt: typeof row.verifiedAt === "string" ? row.verifiedAt : "",
+  };
+}
+
+function readConfidence(value: unknown): number | null {
+  const number = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : Number.NaN;
+  return Number.isFinite(number) && number >= 0 && number <= 1 ? number : null;
+}
+
+function readEvidence(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (typeof item === "string") return item.trim() ? [item] : [];
+    if (!item || typeof item !== "object") return [];
+    const row = item as { text?: unknown; quote?: unknown };
+    const text = typeof row.text === "string" ? row.text : typeof row.quote === "string" ? row.quote : "";
+    return text.trim() ? [text] : [];
+  }).slice(0, 5);
+}
+
+/** Read the classifier reply. A specific path folds into its listed branch. */
+export function domainProfileFromReply(raw: string, model: string): { profile: DomainProfile | null; reason: string } {
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start < 0 || end <= start) return { profile: null, reason: "the reply was not JSON" };
+  let value: unknown;
+  try {
+    value = JSON.parse(raw.slice(start, end + 1));
+  } catch {
+    return { profile: null, reason: "the reply was not JSON" };
+  }
+  if (!value || typeof value !== "object") return { profile: null, reason: "the reply was not JSON" };
+  const row = value as { path?: unknown; label?: unknown; evidence?: unknown; confidence?: unknown };
+  const path = canonicalizeDomainPath(row.path);
+  const evidence = readEvidence(row.evidence).map((item) => item.replace(/\s+/g, " ").trim().slice(0, 300));
+  const score = readConfidence(row.confidence);
+  const label = typeof row.label === "string" ? row.label.trim().slice(0, 120) : "";
+  if (!path) return { profile: null, reason: `path ${JSON.stringify(row.path)} is outside the taxonomy` };
+  if (!label) return { profile: null, reason: "the reply had no label" };
+  if (evidence.length === 0) return { profile: null, reason: "the reply cited no evidence" };
+  if (score == null || score < MIN_DOMAIN_CONFIDENCE) {
+    return { profile: null, reason: `confidence ${String(row.confidence)} is below ${MIN_DOMAIN_CONFIDENCE}` };
+  }
+  return {
+    profile: {
+      taxonomyVersion: DOMAIN_TAXONOMY_VERSION,
+      path,
+      label,
+      evidence,
+      confidence: score,
+      model,
+      classifiedAt: new Date().toISOString(),
+    },
+    reason: "",
   };
 }
 
