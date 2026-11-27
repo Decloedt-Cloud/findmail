@@ -59,7 +59,7 @@ export function canonicalizeDomainPath(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const normalized = value.trim().toLowerCase().replace(/\s+/g, "");
   if (!normalized) return null;
-  if (isDomainPath(normalized)) return normalized;
+  if (DOMAIN_PATH_SET.has(normalized)) return normalized;
   const parts = normalized.split("/").filter(Boolean);
   if (parts.length >= 2) {
     const leaf = `${parts[0]}/${parts[1]}/general`;
